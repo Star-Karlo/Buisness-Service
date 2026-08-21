@@ -1,0 +1,176 @@
+// Package config loads this service's configuration from the environment.
+//
+// The rule applied throughout: anything that is a security control has no
+// default. A missing database password or signing key stops the process at
+// startup instead of quietly falling back to something guessable, which is how
+// the monolith ended up running with a JWT secret of "123".
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/joho/godotenv"
+)
+
+type Config struct {
+	Environment string
+	LogLevel    string
+
+	HTTPPort string
+	GRPCPort string
+
+	Database Database
+
+	// ServiceToken is the credential this service presents on outbound gRPC
+	// calls, and AcceptedServiceTokens are the ones it honours inbound.
+	ServiceToken          string
+	AcceptedServiceTokens []string
+
+	// Addresses of the services this one depends on.
+	AuthGRPCAddr         string
+	MasterDataGRPCAddr   string
+	NotificationGRPCAddr string
+
+	CORSAllowedOrigins []string
+
+	// NotifyTimeout bounds an outbound notification call. Notifications are
+	// best-effort: a slow notification service must not hold a database
+	// transaction open or fail the order it is reporting on.
+	NotifyTimeout time.Duration
+}
+
+type Database struct {
+	Host            string
+	Port            string
+	User            string
+	Password        string
+	Name            string
+	SSLMode         string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+}
+
+// DSN renders the Postgres connection string.
+func (d Database) DSN() string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=Asia/Jakarta",
+		d.Host, d.Port, d.User, d.Password, d.Name, d.SSLMode,
+	)
+}
+
+// Load reads configuration, returning an error rather than exiting so that
+// main can decide how to report it.
+func Load() (*Config, error) {
+	_ = godotenv.Load()
+
+	env := envOr("ENVIRONMENT", "development")
+
+	cfg := &Config{
+		Environment: env,
+		LogLevel:    envOr("LOG_LEVEL", "info"),
+		HTTPPort:    envOr("HTTP_PORT", "5003"),
+		GRPCPort:    envOr("GRPC_PORT", "6003"),
+
+		Database: Database{
+			Host:            envOr("DB_HOST", "localhost"),
+			Port:            envOr("DB_PORT", "5432"),
+			User:            envOr("DB_USER", "karlo"),
+			Name:            envOr("DB_NAME", "karlo_business"),
+			SSLMode:         envOr("DB_SSLMODE", sslDefault(env)),
+			MaxOpenConns:    intOr("DB_MAX_OPEN_CONNS", 25),
+			MaxIdleConns:    intOr("DB_MAX_IDLE_CONNS", 5),
+			ConnMaxLifetime: durationOr("DB_CONN_MAX_LIFETIME", time.Hour),
+		},
+
+		AuthGRPCAddr:         envOr("AUTH_GRPC_ADDR", "localhost:6001"),
+		MasterDataGRPCAddr:   envOr("MASTERDATA_GRPC_ADDR", "localhost:6002"),
+		NotificationGRPCAddr: envOr("NOTIFICATION_GRPC_ADDR", "localhost:6004"),
+
+		CORSAllowedOrigins: splitOr("CORS_ALLOWED_ORIGINS", nil),
+		NotifyTimeout:      durationOr("NOTIFY_TIMEOUT", 5*time.Second),
+	}
+
+	var missing []string
+
+	cfg.Database.Password = os.Getenv("DB_PASSWORD")
+	if cfg.Database.Password == "" {
+		missing = append(missing, "DB_PASSWORD")
+	}
+
+	cfg.ServiceToken = os.Getenv("SERVICE_TOKEN")
+	if cfg.ServiceToken == "" {
+		missing = append(missing, "SERVICE_TOKEN")
+	}
+
+	cfg.AcceptedServiceTokens = splitOr("ACCEPTED_SERVICE_TOKENS", nil)
+	if len(cfg.AcceptedServiceTokens) == 0 {
+		missing = append(missing, "ACCEPTED_SERVICE_TOKENS")
+	}
+
+	// A wildcard CORS policy on an authenticated API lets any origin drive the
+	// browser's credentials. Require the list to be stated.
+	if len(cfg.CORSAllowedOrigins) == 0 {
+		missing = append(missing, "CORS_ALLOWED_ORIGINS")
+	}
+
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("config: required environment variables not set: %s", strings.Join(missing, ", "))
+	}
+
+	return cfg, nil
+}
+
+// IsProduction reports whether production safety rules apply.
+func (c *Config) IsProduction() bool { return c.Environment == "production" }
+
+func sslDefault(env string) string {
+	if env == "production" {
+		return "require"
+	}
+	return "disable"
+}
+
+func envOr(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return fallback
+}
+
+func intOr(key string, fallback int) int {
+	if v, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func durationOr(key string, fallback time.Duration) time.Duration {
+	if v, ok := os.LookupEnv(key); ok {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
+}
+
+func splitOr(key string, fallback []string) []string {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}

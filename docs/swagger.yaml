@@ -1,0 +1,687 @@
+basePath: /api/v1
+definitions:
+  github_com_karlo_business-service_internal_models.Agreement:
+    properties:
+      agreementNumber:
+        type: string
+      createdAt:
+        type: string
+      createdByUserId:
+        type: string
+      currencyId:
+        type: string
+      detail:
+        $ref: '#/definitions/github_com_karlo_business-service_internal_models.JSONB'
+      id:
+        type: string
+      legacyId:
+        type: string
+      paymentTypeId:
+        type: string
+      rates:
+        items:
+          $ref: '#/definitions/github_com_karlo_business-service_internal_models.AgreementRate'
+        type: array
+      shipperCompanyId:
+        type: string
+      status:
+        type: string
+      statusAlias:
+        description: StatusAlias is derived, never stored; see the note on the status
+          machine.
+        type: string
+      statusCode:
+        type: string
+      transporterCompanyId:
+        type: string
+      updatedAt:
+        type: string
+      validFrom:
+        type: string
+      validUntil:
+        type: string
+      verified:
+        type: boolean
+      verifiedAt:
+        type: string
+      verifiedByUserId:
+        type: string
+    type: object
+  github_com_karlo_business-service_internal_models.AgreementRate:
+    properties:
+      agreementId:
+        type: string
+      createdAt:
+        type: string
+      currencyId:
+        type: string
+      destinationCityId:
+        type: string
+      destinationWarehouseId:
+        type: string
+      id:
+        type: string
+      leadTimeHours:
+        type: integer
+      minQuantity:
+        type: number
+      originCityId:
+        type: string
+      originWarehouseId:
+        type: string
+      price:
+        type: number
+      pricingTypeId:
+        type: string
+      truckTypeId:
+        type: string
+    type: object
+  github_com_karlo_business-service_internal_models.Invoice:
+    properties:
+      adjustment:
+        type: number
+      cancelledAt:
+        type: string
+      createdAt:
+        type: string
+      currencyId:
+        type: string
+      detail:
+        $ref: '#/definitions/github_com_karlo_business-service_internal_models.JSONB'
+      dueAt:
+        type: string
+      id:
+        type: string
+      invoiceNumber:
+        type: string
+      issuedAt:
+        type: string
+      legacyId:
+        type: string
+      lines:
+        items:
+          $ref: '#/definitions/github_com_karlo_business-service_internal_models.InvoiceLine'
+        type: array
+      notes:
+        type: string
+      paidAt:
+        type: string
+      pph23Amount:
+        type: number
+      pph23Percentage:
+        type: number
+      ppnAmount:
+        type: number
+      ppnPercentage:
+        type: number
+      shipperCompanyId:
+        type: string
+      status:
+        type: string
+      statusAlias:
+        type: string
+      statusCode:
+        type: string
+      submittedAt:
+        type: string
+      subtotal:
+        type: number
+      total:
+        type: number
+      transporterCompanyId:
+        type: string
+      updatedAt:
+        type: string
+      verifiedAt:
+        type: string
+    type: object
+  github_com_karlo_business-service_internal_models.InvoiceLine:
+    properties:
+      amount:
+        type: number
+      createdAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      invoiceId:
+        type: string
+      orderId:
+        type: string
+      quantity:
+        type: number
+      unitPrice:
+        type: number
+    type: object
+  github_com_karlo_business-service_internal_models.JSONB:
+    additionalProperties: true
+    type: object
+  github_com_karlo_business-service_internal_models.Order:
+    properties:
+      agreementId:
+        type: string
+      cancelReason:
+        type: string
+      cancelledAt:
+        type: string
+      cancelledByUserId:
+        type: string
+      cargoTypeId:
+        type: string
+      createdAt:
+        type: string
+      createdByUserId:
+        type: string
+      currencyId:
+        type: string
+      customerId:
+        type: string
+      deliveryAt:
+        type: string
+      destinationWarehouseId:
+        type: string
+      detail:
+        $ref: '#/definitions/github_com_karlo_business-service_internal_models.JSONB'
+      driverUserId:
+        type: string
+      id:
+        type: string
+      itemTypeId:
+        type: string
+      legacyId:
+        type: string
+      orderKind:
+        type: string
+      orderNumber:
+        type: string
+      originWarehouseId:
+        type: string
+      parentOrderId:
+        type: string
+      pickupAt:
+        type: string
+      price:
+        type: number
+      quantity:
+        type: number
+      referenceNumber:
+        type: string
+      shipperCompanyId:
+        type: string
+      status:
+        type: string
+      statusAlias:
+        type: string
+      statusCode:
+        type: string
+      transporterCompanyId:
+        type: string
+      truckId:
+        description: TruckID is a Mongo ObjectId hex string, owned by the master data
+          service.
+        type: string
+      updatedAt:
+        type: string
+      volumeM3:
+        type: number
+      weightKg:
+        type: number
+    type: object
+  github_com_karlo_business-service_internal_models.Shipment:
+    properties:
+      arrivedLoadingAt:
+        type: string
+      arrivedUnloadingAt:
+        type: string
+      createdAt:
+        type: string
+      distanceMeters:
+        type: integer
+      driverUserId:
+        type: string
+      finishedAt:
+        type: string
+      id:
+        type: string
+      loadingFinishedAt:
+        type: string
+      loadingLatitude:
+        type: number
+      loadingLongitude:
+        type: number
+      loadingStartedAt:
+        type: string
+      loadingWithinGeofence:
+        type: boolean
+      orderId:
+        type: string
+      startedToLoadingAt:
+        type: string
+      startedToUnloadingAt:
+        type: string
+      status:
+        type: string
+      statusAlias:
+        type: string
+      statusCode:
+        type: string
+      tollCost:
+        type: number
+      truckId:
+        type: string
+      unloadingFinishedAt:
+        type: string
+      unloadingLatitude:
+        type: number
+      unloadingLongitude:
+        type: number
+      unloadingStartedAt:
+        type: string
+      unloadingWithinGeofence:
+        type: boolean
+      updatedAt:
+        type: string
+    type: object
+  github_com_karlo_business-service_internal_platform_response.Meta:
+    properties:
+      limit:
+        type: integer
+      page:
+        type: integer
+      totalPages:
+        type: integer
+      totalRows:
+        type: integer
+    type: object
+host: localhost:5003
+info:
+  contact:
+    email: engineering@karlo.co.id
+    name: Karlo Engineering
+  description: 'The transactional core: agreements, orders, the shipment lifecycle
+    and invoices.\n\nStatus changes go through state machines rather than accepting
+    an arbitrary status string, so an illegal transition is refused with 409 rather
+    than written.'
+  termsOfService: https://karlo.co.id/terms
+  title: Karlo Business API
+  version: "1.0"
+paths:
+  /agreements:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_platform_response.Meta'
+      security:
+      - BearerAuth: []
+      summary: List agreements
+      tags:
+      - Agreements
+    post:
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Agreement'
+      security:
+      - BearerAuth: []
+      summary: Create agreement
+      tags:
+      - Agreements
+  /agreements/{id}:
+    get:
+      parameters:
+      - description: Agreement ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Agreement'
+      security:
+      - BearerAuth: []
+      summary: Get agreement
+      tags:
+      - Agreements
+  /agreements/{id}/decision:
+    put:
+      parameters:
+      - description: Agreement ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Approve or reject an agreement
+      tags:
+      - Agreements
+  /agreements/{id}/verify:
+    put:
+      parameters:
+      - description: Agreement ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Verify an agreement
+      tags:
+      - Agreements
+  /invoices:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_platform_response.Meta'
+      security:
+      - BearerAuth: []
+      summary: List invoices
+      tags:
+      - Invoices
+    post:
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Invoice'
+      security:
+      - BearerAuth: []
+      summary: Create invoice
+      tags:
+      - Invoices
+  /invoices/{id}:
+    get:
+      parameters:
+      - description: Invoice ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Invoice'
+      security:
+      - BearerAuth: []
+      summary: Get invoice
+      tags:
+      - Invoices
+  /invoices/{id}/status:
+    put:
+      parameters:
+      - description: Invoice ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Change invoice status
+      tags:
+      - Invoices
+  /orders:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_platform_response.Meta'
+      security:
+      - BearerAuth: []
+      summary: List orders
+      tags:
+      - Orders
+    post:
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Order'
+      security:
+      - BearerAuth: []
+      summary: Create order
+      tags:
+      - Orders
+  /orders/{id}:
+    get:
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Order'
+      security:
+      - BearerAuth: []
+      summary: Get order
+      tags:
+      - Orders
+    put:
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update a draft order
+      tags:
+      - Orders
+  /orders/{id}/assign:
+    put:
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Order'
+      security:
+      - BearerAuth: []
+      summary: Assign a driver
+      tags:
+      - Orders
+  /orders/{id}/history:
+    get:
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Order status history
+      tags:
+      - Orders
+  /orders/{id}/status:
+    put:
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Order'
+      security:
+      - BearerAuth: []
+      summary: Change order status
+      tags:
+      - Orders
+  /orders/{id}/transitions:
+    get:
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Available order transitions
+      tags:
+      - Orders
+  /orders/{orderId}/shipment:
+    get:
+      parameters:
+      - description: Order ID
+        in: path
+        name: orderId
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Shipment'
+      security:
+      - BearerAuth: []
+      summary: Get an order's shipment
+      tags:
+      - Shipments
+  /orders/summary:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Order dashboard summary
+      tags:
+      - Orders
+  /shipments/{id}/documents:
+    get:
+      parameters:
+      - description: Shipment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List shipment documents
+      tags:
+      - Shipments
+    post:
+      parameters:
+      - description: Shipment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "201":
+          description: Created
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Attach a shipment document
+      tags:
+      - Shipments
+  /shipments/{id}/status:
+    put:
+      parameters:
+      - description: Shipment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_karlo_business-service_internal_models.Shipment'
+      security:
+      - BearerAuth: []
+      summary: Advance shipment status
+      tags:
+      - Shipments
+  /shipments/{id}/transitions:
+    get:
+      parameters:
+      - description: Shipment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Available shipment transitions
+      tags:
+      - Shipments
+schemes:
+- http
+- https
+securityDefinitions:
+  BearerAuth:
+    description: RS256 access token issued by the authentication service, as "Bearer
+      <token>".
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

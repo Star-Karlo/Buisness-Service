@@ -1,0 +1,1088 @@
+{
+    "schemes": [
+        "http",
+        "https"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "The transactional core: agreements, orders, the shipment lifecycle and invoices.\\n\\nStatus changes go through state machines rather than accepting an arbitrary status string, so an illegal transition is refused with 409 rather than written.",
+        "title": "Karlo Business API",
+        "termsOfService": "https://karlo.co.id/terms",
+        "contact": {
+            "name": "Karlo Engineering",
+            "email": "engineering@karlo.co.id"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:5003",
+    "basePath": "/api/v1",
+    "paths": {
+        "/agreements": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Agreements"
+                ],
+                "summary": "List agreements",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_platform_response.Meta"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Agreements"
+                ],
+                "summary": "Create agreement",
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Agreement"
+                        }
+                    }
+                }
+            }
+        },
+        "/agreements/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Agreements"
+                ],
+                "summary": "Get agreement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agreement ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Agreement"
+                        }
+                    }
+                }
+            }
+        },
+        "/agreements/{id}/decision": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Agreements"
+                ],
+                "summary": "Approve or reject an agreement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agreement ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/agreements/{id}/verify": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Agreements"
+                ],
+                "summary": "Verify an agreement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agreement ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/invoices": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Invoices"
+                ],
+                "summary": "List invoices",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_platform_response.Meta"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Invoices"
+                ],
+                "summary": "Create invoice",
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Invoice"
+                        }
+                    }
+                }
+            }
+        },
+        "/invoices/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Invoices"
+                ],
+                "summary": "Get invoice",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invoice ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Invoice"
+                        }
+                    }
+                }
+            }
+        },
+        "/invoices/{id}/status": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Invoices"
+                ],
+                "summary": "Change invoice status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invoice ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "List orders",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_platform_response.Meta"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Create order",
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Order"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Order dashboard summary",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Get order",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Order ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Order"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Update a draft order",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Order ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders/{id}/assign": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Assign a driver",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Order ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Order"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders/{id}/history": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Order status history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Order ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders/{id}/status": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Change order status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Order ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Order"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders/{id}/transitions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Available order transitions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Order ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/orders/{orderId}/shipment": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Shipments"
+                ],
+                "summary": "Get an order's shipment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Order ID",
+                        "name": "orderId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Shipment"
+                        }
+                    }
+                }
+            }
+        },
+        "/shipments/{id}/documents": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Shipments"
+                ],
+                "summary": "List shipment documents",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Shipment ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Shipments"
+                ],
+                "summary": "Attach a shipment document",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Shipment ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/shipments/{id}/status": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Shipments"
+                ],
+                "summary": "Advance shipment status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Shipment ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_karlo_business-service_internal_models.Shipment"
+                        }
+                    }
+                }
+            }
+        },
+        "/shipments/{id}/transitions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "Shipments"
+                ],
+                "summary": "Available shipment transitions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Shipment ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "github_com_karlo_business-service_internal_models.Agreement": {
+            "type": "object",
+            "properties": {
+                "agreementNumber": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdByUserId": {
+                    "type": "string"
+                },
+                "currencyId": {
+                    "type": "string"
+                },
+                "detail": {
+                    "$ref": "#/definitions/github_com_karlo_business-service_internal_models.JSONB"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "legacyId": {
+                    "type": "string"
+                },
+                "paymentTypeId": {
+                    "type": "string"
+                },
+                "rates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_karlo_business-service_internal_models.AgreementRate"
+                    }
+                },
+                "shipperCompanyId": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "statusAlias": {
+                    "description": "StatusAlias is derived, never stored; see the note on the status machine.",
+                    "type": "string"
+                },
+                "statusCode": {
+                    "type": "string"
+                },
+                "transporterCompanyId": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "validFrom": {
+                    "type": "string"
+                },
+                "validUntil": {
+                    "type": "string"
+                },
+                "verified": {
+                    "type": "boolean"
+                },
+                "verifiedAt": {
+                    "type": "string"
+                },
+                "verifiedByUserId": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_karlo_business-service_internal_models.AgreementRate": {
+            "type": "object",
+            "properties": {
+                "agreementId": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "currencyId": {
+                    "type": "string"
+                },
+                "destinationCityId": {
+                    "type": "string"
+                },
+                "destinationWarehouseId": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "leadTimeHours": {
+                    "type": "integer"
+                },
+                "minQuantity": {
+                    "type": "number"
+                },
+                "originCityId": {
+                    "type": "string"
+                },
+                "originWarehouseId": {
+                    "type": "string"
+                },
+                "price": {
+                    "type": "number"
+                },
+                "pricingTypeId": {
+                    "type": "string"
+                },
+                "truckTypeId": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_karlo_business-service_internal_models.Invoice": {
+            "type": "object",
+            "properties": {
+                "adjustment": {
+                    "type": "number"
+                },
+                "cancelledAt": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "currencyId": {
+                    "type": "string"
+                },
+                "detail": {
+                    "$ref": "#/definitions/github_com_karlo_business-service_internal_models.JSONB"
+                },
+                "dueAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invoiceNumber": {
+                    "type": "string"
+                },
+                "issuedAt": {
+                    "type": "string"
+                },
+                "legacyId": {
+                    "type": "string"
+                },
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_karlo_business-service_internal_models.InvoiceLine"
+                    }
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "paidAt": {
+                    "type": "string"
+                },
+                "pph23Amount": {
+                    "type": "number"
+                },
+                "pph23Percentage": {
+                    "type": "number"
+                },
+                "ppnAmount": {
+                    "type": "number"
+                },
+                "ppnPercentage": {
+                    "type": "number"
+                },
+                "shipperCompanyId": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "statusAlias": {
+                    "type": "string"
+                },
+                "statusCode": {
+                    "type": "string"
+                },
+                "submittedAt": {
+                    "type": "string"
+                },
+                "subtotal": {
+                    "type": "number"
+                },
+                "total": {
+                    "type": "number"
+                },
+                "transporterCompanyId": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "verifiedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_karlo_business-service_internal_models.InvoiceLine": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invoiceId": {
+                    "type": "string"
+                },
+                "orderId": {
+                    "type": "string"
+                },
+                "quantity": {
+                    "type": "number"
+                },
+                "unitPrice": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_karlo_business-service_internal_models.JSONB": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "github_com_karlo_business-service_internal_models.Order": {
+            "type": "object",
+            "properties": {
+                "agreementId": {
+                    "type": "string"
+                },
+                "cancelReason": {
+                    "type": "string"
+                },
+                "cancelledAt": {
+                    "type": "string"
+                },
+                "cancelledByUserId": {
+                    "type": "string"
+                },
+                "cargoTypeId": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdByUserId": {
+                    "type": "string"
+                },
+                "currencyId": {
+                    "type": "string"
+                },
+                "customerId": {
+                    "type": "string"
+                },
+                "deliveryAt": {
+                    "type": "string"
+                },
+                "destinationWarehouseId": {
+                    "type": "string"
+                },
+                "detail": {
+                    "$ref": "#/definitions/github_com_karlo_business-service_internal_models.JSONB"
+                },
+                "driverUserId": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "itemTypeId": {
+                    "type": "string"
+                },
+                "legacyId": {
+                    "type": "string"
+                },
+                "orderKind": {
+                    "type": "string"
+                },
+                "orderNumber": {
+                    "type": "string"
+                },
+                "originWarehouseId": {
+                    "type": "string"
+                },
+                "parentOrderId": {
+                    "type": "string"
+                },
+                "pickupAt": {
+                    "type": "string"
+                },
+                "price": {
+                    "type": "number"
+                },
+                "quantity": {
+                    "type": "number"
+                },
+                "referenceNumber": {
+                    "type": "string"
+                },
+                "shipperCompanyId": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "statusAlias": {
+                    "type": "string"
+                },
+                "statusCode": {
+                    "type": "string"
+                },
+                "transporterCompanyId": {
+                    "type": "string"
+                },
+                "truckId": {
+                    "description": "TruckID is a Mongo ObjectId hex string, owned by the master data service.",
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "volumeM3": {
+                    "type": "number"
+                },
+                "weightKg": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_karlo_business-service_internal_models.Shipment": {
+            "type": "object",
+            "properties": {
+                "arrivedLoadingAt": {
+                    "type": "string"
+                },
+                "arrivedUnloadingAt": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "distanceMeters": {
+                    "type": "integer"
+                },
+                "driverUserId": {
+                    "type": "string"
+                },
+                "finishedAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "loadingFinishedAt": {
+                    "type": "string"
+                },
+                "loadingLatitude": {
+                    "type": "number"
+                },
+                "loadingLongitude": {
+                    "type": "number"
+                },
+                "loadingStartedAt": {
+                    "type": "string"
+                },
+                "loadingWithinGeofence": {
+                    "type": "boolean"
+                },
+                "orderId": {
+                    "type": "string"
+                },
+                "startedToLoadingAt": {
+                    "type": "string"
+                },
+                "startedToUnloadingAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "statusAlias": {
+                    "type": "string"
+                },
+                "statusCode": {
+                    "type": "string"
+                },
+                "tollCost": {
+                    "type": "number"
+                },
+                "truckId": {
+                    "type": "string"
+                },
+                "unloadingFinishedAt": {
+                    "type": "string"
+                },
+                "unloadingLatitude": {
+                    "type": "number"
+                },
+                "unloadingLongitude": {
+                    "type": "number"
+                },
+                "unloadingStartedAt": {
+                    "type": "string"
+                },
+                "unloadingWithinGeofence": {
+                    "type": "boolean"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_karlo_business-service_internal_platform_response.Meta": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "totalPages": {
+                    "type": "integer"
+                },
+                "totalRows": {
+                    "type": "integer"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "RS256 access token issued by the authentication service, as \"Bearer \u003ctoken\u003e\".",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}
