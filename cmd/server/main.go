@@ -16,6 +16,7 @@ import (
 	"github.com/karlo/business-service/internal/grpcserver"
 	"github.com/karlo/business-service/internal/handlers"
 	"github.com/karlo/business-service/internal/platform/authctx"
+	"github.com/karlo/business-service/internal/platform/cache"
 	businessv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/business/v1"
 	"github.com/karlo/business-service/internal/platform/grpcutil"
 	"github.com/karlo/business-service/internal/platform/logger"
@@ -56,6 +57,10 @@ func run() error {
 	// Logs go to stdout as JSON, and additionally to Fluentd when
 	// FLUENTD_HOST is set. An unreachable collector degrades to
 	// stdout-only rather than stopping the service.
+	// This service belongs to TMS; authctx resolves HasModule, Role and
+	// HasRole against it.
+	authctx.SetProduct(authctx.ProductTMS)
+
 	logger.InitFromEnv("business")
 	defer logger.Close()
 
@@ -69,7 +74,16 @@ func run() error {
 		return err
 	}
 
-	authClient, err := clients.NewAuth(cfg.AuthGRPCAddr, "business", cfg.ServiceToken)
+	// Optional. Without REDIS_ADDR this is a no-op and company settings are
+	// fetched from the authentication service on every call.
+	cacheClient := cache.FromEnv("business")
+	defer func() {
+		if err := cacheClient.Close(); err != nil {
+			slog.Error("cache close failed", "error", err)
+		}
+	}()
+
+	authClient, err := clients.NewAuth(cfg.AuthGRPCAddr, "business", cfg.ServiceToken, cacheClient)
 	if err != nil {
 		return err
 	}

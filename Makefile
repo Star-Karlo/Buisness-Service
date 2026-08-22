@@ -55,7 +55,10 @@ test-integration-up:
 		-e POSTGRES_USER=karlo -e POSTGRES_PASSWORD=karlo -e POSTGRES_DB=karlo_business_test \
 		-p $(IT_PORT):5432 postgres:16-alpine
 	@echo "waiting for postgres..."
-	@until docker exec karlo-business-it-pg pg_isready -U karlo >/dev/null 2>&1; do sleep 1; done
+	@# pg_isready is NOT sufficient: the official image starts a temporary
+	@# server to run initdb, and pg_isready succeeds against that before the
+	@# database exists. Poll for the database itself.
+	@until docker exec karlo-business-it-pg psql -U karlo -d karlo_business_test -c 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
 	@for f in migrations/*.up.sql; do \
 		docker exec -i karlo-business-it-pg psql -U karlo -d karlo_business_test -v ON_ERROR_STOP=1 < "$$f" >/dev/null; \
 	done

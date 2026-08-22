@@ -387,7 +387,7 @@ func callerActor(c *gin.Context) (services.Actor, bool) {
 		return services.Actor{}, false
 	}
 
-	return services.Actor{UserID: userID, CompanyID: companyID, Role: principal.Role}, true
+	return services.Actor{UserID: userID, CompanyID: companyID, Role: principal.Role()}, true
 }
 
 func pathUUID(c *gin.Context, name string) (uuid.UUID, bool) {

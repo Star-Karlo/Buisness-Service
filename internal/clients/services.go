@@ -3,8 +3,10 @@ package clients
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/karlo/business-service/internal/platform/authctx"
+	"github.com/karlo/business-service/internal/platform/cache"
 	authv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/auth/v1"
 	masterdatav1 "github.com/karlo/business-service/internal/platform/genproto/karlo/masterdata/v1"
 	"github.com/karlo/business-service/internal/platform/grpcutil"
@@ -15,16 +17,17 @@ import (
 type Auth struct {
 	conn   *grpc.ClientConn
 	client authv1.AuthServiceClient
+	cache  cache.Cache
 }
 
-func NewAuth(target, serviceName, serviceToken string) (*Auth, error) {
+func NewAuth(target, serviceName, serviceToken string, c cache.Cache) (*Auth, error) {
 	conn, err := grpcutil.Dial(grpcutil.DialConfig{
 		Service: serviceName, Target: target, ServiceToken: serviceToken,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Auth{conn: conn, client: authv1.NewAuthServiceClient(conn)}, nil
+	return &Auth{conn: conn, client: authv1.NewAuthServiceClient(conn), cache: c}, nil
 }
 
 func (a *Auth) Close() error { return a.conn.Close() }
@@ -39,39 +42,77 @@ func (a *Auth) ValidateToken(ctx context.Context, token string) (authctx.Princip
 		return authctx.Principal{}, fmt.Errorf("clients: %s", resp.GetReason())
 	}
 
-	user := resp.GetUser()
+	return principalFrom(resp.GetUser()), nil
+}
+
+// principalFrom maps the authentication service's user into a principal.
+//
+// The per-product access map is copied wholesale rather than flattened: this
+// service resolves its own product through authctx, and flattening here would
+// discard the other product's access from a token that legitimately carries
+// both.
+func principalFrom(user *authv1.User) authctx.Principal {
 	p := authctx.Principal{
-		UserID:    user.GetId(),
-		Role:      user.GetRole(),
-		CompanyID: user.GetCompanyId(),
-		ParentID:  user.GetParentId(),
+		UserID:          user.GetId(),
+		CompanyID:       user.GetCompanyId(),
+		ParentID:        user.GetParentId(),
+		IsPlatformStaff: user.GetIsPlatformStaff(),
+		FMSTenantID:     user.GetFmsTenantId(),
 	}
-	if perm := user.GetPermission(); len(perm) > 0 {
-		p.Permission = make(map[string]map[string]bool, len(perm))
-		for module, actions := range perm {
-			p.Permission[module] = actions.GetActions()
+
+	if access := user.GetAccess(); len(access) > 0 {
+		p.Access = make(map[authctx.Product]authctx.ProductAccess, len(access))
+		for product, a := range access {
+			p.Access[authctx.Product(product)] = authctx.ProductAccess{
+				Role:        a.GetRole(),
+				Permissions: a.GetPermissions(),
+				Features:    a.GetFeatures(),
+			}
 		}
 	}
-	return p, nil
+
+	return p
 }
 
 // CompanySettings fetches the business toggles that govern order rules:
 // whether cancellation needs validation, whether completion is geofenced, the
 // tax percentages used on invoices.
+//
+// Cached, because this is read on every order creation, every geofenced arrival
+// and every invoice, while the settings themselves change perhaps twice a year.
+// Uncached it puts a cross-service gRPC call on the critical path of the
+// busiest write in the system.
+//
+// The TTL is short — five minutes — because these values decide what a customer
+// is charged. A stale PPN rate produces an invoice that is wrong in a way
+// nobody notices until reconciliation, so the window in which that is possible
+// is kept small deliberately.
 func (a *Auth) CompanySettings(ctx context.Context, companyID string) (*authv1.CompanySettings, error) {
+	key := cache.Key("business", "company", "settings", companyID)
+
+	var cached authv1.CompanySettings
+	if cache.GetJSON(ctx, a.cache, key, &cached) {
+		return &cached, nil
+	}
+
 	resp, err := a.client.GetCompany(ctx, &authv1.GetCompanyRequest{Id: companyID})
 	if err != nil {
 		return nil, fmt.Errorf("clients: get company: %w", err)
 	}
+
 	settings := resp.GetCompany().GetSettings()
 	if settings == nil {
 		// A company with no stored settings uses the platform defaults rather
 		// than zero values, which would silently set both tax rates to nought.
+		// Not cached: this is a fallback for missing data, and caching it would
+		// hide the moment the real settings appear.
 		return &authv1.CompanySettings{
 			PpnPercentage:   0.02,
 			Pph23Percentage: 0.11,
 		}, nil
 	}
+
+	cache.SetJSON(ctx, a.cache, key, settings, 5*time.Minute)
 	return settings, nil
 }
 
@@ -140,12 +181,20 @@ func (m *MasterData) DriverIsPairedWithTruck(ctx context.Context, driverID, truc
 }
 
 // ValidateCatalogRefs checks a set of catalogue references before a write.
-func (m *MasterData) ValidateCatalogRefs(ctx context.Context, refs []*masterdatav1.CatalogRef) error {
+// ValidateCatalogRefs checks a set of catalogue references before a write.
+//
+// The company is passed explicitly: a reference to another company's private
+// catalogue entry must come back invalid. Omitting it would validate against
+// the global catalogues only, which would reject a company's own item types.
+func (m *MasterData) ValidateCatalogRefs(ctx context.Context, companyID string, refs []*masterdatav1.CatalogRef) error {
 	if len(refs) == 0 {
 		return nil
 	}
 
-	resp, err := m.client.ValidateReferences(ctx, &masterdatav1.ValidateReferencesRequest{Refs: refs})
+	resp, err := m.client.ValidateReferences(ctx, &masterdatav1.ValidateReferencesRequest{
+		Refs:      refs,
+		CompanyId: companyID,
+	})
 	if err != nil {
 		return fmt.Errorf("clients: validate references: %w", err)
 	}

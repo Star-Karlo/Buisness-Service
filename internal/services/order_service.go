@@ -84,7 +84,7 @@ type CreateOrderInput struct {
 
 // Create places a new order.
 func (s *OrderService) Create(ctx context.Context, actor Actor, in CreateOrderInput) (*models.Order, error) {
-	if err := s.validateCreate(ctx, in); err != nil {
+	if err := s.validateCreate(ctx, actor, in); err != nil {
 		return nil, err
 	}
 
@@ -157,7 +157,7 @@ func (s *OrderService) Create(ctx context.Context, actor Actor, in CreateOrderIn
 	return order, nil
 }
 
-func (s *OrderService) validateCreate(ctx context.Context, in CreateOrderInput) error {
+func (s *OrderService) validateCreate(ctx context.Context, actor Actor, in CreateOrderInput) error {
 	if in.OrderKind != "" &&
 		in.OrderKind != models.OrderKindStandard &&
 		in.OrderKind != models.OrderKindEmpty &&
@@ -182,7 +182,7 @@ func (s *OrderService) validateCreate(ctx context.Context, in CreateOrderInput) 
 
 	// Confirm the master data references exist before writing an order that
 	// points at them.
-	if err := s.masterdata.ValidateCatalogRefs(ctx, catalogRefs(in.CargoTypeID, in.ItemTypeID)); err != nil {
+	if err := s.masterdata.ValidateCatalogRefs(ctx, actor.CompanyID.String(), catalogRefs(in.CargoTypeID, in.ItemTypeID)); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 

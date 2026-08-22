@@ -42,6 +42,22 @@ Amounts are `decimal.Decimal`, never `float64`. PPN is *added* and PPH23 is
 *withheld*; both are computed in one place with the signs pinned by test.
 
 
+## Company settings are cached, orders are not
+
+The billing company's settings — tax rates, `finishWithGeofencing`,
+`activeAgreementVerifiedOnly` — are read on every order creation, every geofenced
+arrival and every invoice, and change perhaps twice a year. Uncached that puts a
+cross-service gRPC call on the critical path of the busiest write in the system,
+so they are held for **5 minutes**.
+
+Five minutes rather than the catalogues' fifteen because these values decide what
+a customer is charged, and a stale PPN rate produces an invoice that is wrong in
+a way nobody notices until reconciliation.
+
+Nothing authoritative is cached: order status, invoice totals and reference
+validation are read from their owner every time. See `../docs/CACHING.md` for the
+full list of what is deliberately left out and why.
+
 ## Layout
 
 ```

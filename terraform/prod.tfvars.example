@@ -1,0 +1,33 @@
+# Business service, production.
+
+environment          = "prod"
+cors_allowed_origins = ["https://app.karlo.co.id"]
+fluentd_host         = "fluentd.karlo.internal"
+
+# The busiest service: every order, shipment and invoice write.
+task_cpu      = 512
+task_memory   = 1024
+desired_count = 2
+min_capacity  = 2
+max_capacity  = 8
+
+extra_environment = [
+  { name = "DB_NAME", value = "karlo_business" },
+  { name = "DB_SSLMODE", value = "require" },
+  { name = "NOTIFY_TIMEOUT", value = "5s" },
+]
+
+secrets = [
+  { name = "DB_HOST", valueFrom = "SECRET_RDS:host::" },
+  { name = "DB_USER", valueFrom = "SECRET_RDS:username::" },
+  { name = "DB_PASSWORD", valueFrom = "SECRET_RDS:password::" },
+  { name = "JWT_PUBLIC_KEY", valueFrom = "SECRET_JWT_PUBLIC" },
+  { name = "SERVICE_TOKEN", valueFrom = "SECRET_TOKENS:business-service::" },
+  { name = "ACCEPTED_SERVICE_TOKENS", valueFrom = "SECRET_TOKENS:all::" },
+]
+
+secret_arns = ["SECRET_RDS", "SECRET_JWT_PUBLIC", "SECRET_TOKENS"]
+
+# The SECRET_* placeholders are Secrets Manager ARNs from platform-terraform's
+# `secret_arns` output. Copy this file to prod.tfvars and substitute them; the
+# copy is gitignored because the ARNs name where production credentials live.
