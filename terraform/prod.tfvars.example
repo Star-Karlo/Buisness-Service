@@ -30,17 +30,7 @@ extra_environment = [
   { name = "NOTIFY_TIMEOUT", value = "5s" },
 ]
 
-secrets = [
-  { name = "DB_HOST", valueFrom = "SECRET_RDS:host::" },
-  { name = "DB_USER", valueFrom = "SECRET_RDS:username::" },
-  { name = "DB_PASSWORD", valueFrom = "SECRET_RDS:password::" },
-  { name = "JWT_PUBLIC_KEY", valueFrom = "SECRET_JWT_PUBLIC" },
-  { name = "SERVICE_TOKEN", valueFrom = "SECRET_TOKENS:business-service::" },
-  { name = "ACCEPTED_SERVICE_TOKENS", valueFrom = "SECRET_TOKENS:all::" },
-]
 
-secret_arns = ["SECRET_RDS", "SECRET_JWT_PUBLIC", "SECRET_TOKENS"]
 
-# The SECRET_* placeholders are Secrets Manager ARNs from platform-terraform's
 # `secret_arns` output. Copy this file to prod.tfvars and substitute them; the
 # copy is gitignored because the ARNs name where production credentials live.
