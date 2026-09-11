@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"strconv"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -9,6 +11,7 @@ import (
 	"github.com/karlo/business-service/internal/models"
 	"github.com/karlo/business-service/internal/platform/authctx"
 	"github.com/karlo/business-service/internal/platform/response"
+	"github.com/karlo/business-service/internal/repository"
 	"github.com/karlo/business-service/internal/services"
 )
 
@@ -218,6 +221,31 @@ func NewAllowanceHandler(a *services.AllowanceService) *AllowanceHandler {
 // @Security BearerAuth
 // @Success  200 {object} response.Envelope
 // @Router   /orders/{id}/allowance [get]
+// List is the Uang Sangu screen: every order that needs or has an advance.
+func (h *AllowanceHandler) List(c *gin.Context) {
+	actor, ok := callerActor(c)
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	state := c.Query("state")
+
+	rows, total, err := h.allowances.List(c.Request.Context(), actor, state, page, pageSize)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if rows == nil {
+		rows = []repository.AllowanceListRow{}
+	}
+	pages := 0
+	if pageSize > 0 {
+		pages = int((total + int64(pageSize) - 1) / int64(pageSize))
+	}
+	response.Paginated(c, rows, &response.Meta{Page: page, Limit: pageSize, TotalRows: total, TotalPages: pages})
+}
+
 func (h *AllowanceHandler) Get(c *gin.Context) {
 	actor, ok := callerActor(c)
 	if !ok {

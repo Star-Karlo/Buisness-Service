@@ -84,6 +84,19 @@ type View struct {
 }
 
 // Get returns the current advance and the evidence for it.
+// List pages through the caller's orders with their advances, for the Uang
+// Sangu screen. Scoped by the actor's company in the query itself; there is no
+// per-row check because no row can come back that is not theirs.
+func (s *AllowanceService) List(ctx context.Context, actor Actor, state string, page, pageSize int) ([]repository.AllowanceListRow, int64, error) {
+	if pageSize <= 0 || pageSize > 200 {
+		pageSize = 20
+	}
+	if page < 0 {
+		page = 0
+	}
+	return s.allowances.ListByCompany(ctx, actor.CompanyID, state, page*pageSize, pageSize)
+}
+
 func (s *AllowanceService) Get(ctx context.Context, actor Actor, orderID uuid.UUID) (*View, error) {
 	if _, err := s.orders.FindByID(ctx, actor.CompanyID, orderID); err != nil {
 		return nil, err

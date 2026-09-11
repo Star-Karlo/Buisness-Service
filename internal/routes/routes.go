@@ -119,6 +119,9 @@ func Setup(d Deps) *gin.Engine {
 	// company decides independently who may see the figure, who may set it,
 	// and who may commit it to the driver — for some that is sales, for others
 	// finance.
+	// A static segment beside the :id routes. Gin's tree prefers the literal
+	// match, so "allowances" is never parsed as an order id.
+	orders.GET("/allowances", authctx.RequireModule("order.allowance.read"), d.Allowance.List)
 	orders.GET("/:id/allowance", authctx.RequireModule("order.allowance.read"), d.Allowance.Get)
 	orders.PUT("/:id/allowance", authctx.RequireModule("order.allowance.write"), d.Allowance.Save)
 	orders.POST("/:id/allowance/finalise", authctx.RequireModule("order.allowance.finalise"), d.Allowance.Finalise)

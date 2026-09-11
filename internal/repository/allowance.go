@@ -173,3 +173,74 @@ func (r *HandoverRepository) MarkVerified(ctx context.Context, id uuid.UUID, lat
 			"verified_within_geofence": withinGeofence,
 		}).Error
 }
+
+// AllowanceListRow is one order as the Uang Sangu screen shows it: the order's
+// own identifying fields with its advance alongside, whether or not one has
+// been entered yet.
+type AllowanceListRow struct {
+	OrderID                uuid.UUID  `json:"orderId"`
+	OrderNumber            string     `json:"orderNumber"`
+	StatusCode             string     `json:"statusCode"`
+	CustomerID             *string    `json:"customerId,omitempty"`
+	OriginWarehouseID      *string    `json:"originWarehouseId,omitempty"`
+	DestinationWarehouseID *string    `json:"destinationWarehouseId,omitempty"`
+	TruckID                *string    `json:"truckId,omitempty"`
+	PickupAt               *time.Time `json:"pickupAt,omitempty"`
+
+	// Nil until somebody has entered an advance.
+	Total       *models.Money `json:"total,omitempty"`
+	EnteredAt   *time.Time    `json:"enteredAt,omitempty"`
+	FinalisedAt *time.Time    `json:"finalisedAt,omitempty"`
+}
+
+// ListByCompany pages through a company's orders with their advances.
+//
+// One query with a LEFT JOIN rather than an allowance per order from the
+// browser: the screen lists twenty orders, and twenty round trips to render one
+// page is the shape that made the legacy list take four seconds.
+//
+// Orders without an advance are INCLUDED. The screen's job is to show which
+// orders still need one, and a list that only showed entered advances would
+// hide exactly the rows somebody has to act on.
+//
+// `state` narrows: "pending" is entered but not finalised, "final" is
+// finalised, "none" is no advance yet, "" is everything.
+func (r *AllowanceRepository) ListByCompany(ctx context.Context, companyID uuid.UUID, state string, offset, limit int) ([]AllowanceListRow, int64, error) {
+	base := r.db.WithContext(ctx).
+		Table("orders o").
+		Joins("LEFT JOIN order_allowances a ON a.order_id = o.id").
+		Where("o.deleted_at IS NULL").
+		Where("(o.shipper_company_id = ? OR o.transporter_company_id = ?)", companyID, companyID).
+		// An advance is for a truck that is going somewhere. Drafts and
+		// cancelled orders never need one.
+		Where("o.status_code IN ?", []string{
+			models.OrderReadyToPlan, models.OrderAssigned, models.OrderInTransit,
+			models.OrderDelivered, models.OrderCompleted,
+		})
+
+	switch state {
+	case "pending":
+		base = base.Where("a.order_id IS NOT NULL AND a.finalised_at IS NULL")
+	case "final":
+		base = base.Where("a.finalised_at IS NOT NULL")
+	case "none":
+		base = base.Where("a.order_id IS NULL")
+	}
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var rows []AllowanceListRow
+	err := base.
+		Select(`o.id AS order_id, o.order_number, o.status_code, o.customer_id,
+		        o.origin_warehouse_id, o.destination_warehouse_id, o.truck_id, o.pickup_at,
+		        a.total, a.entered_at, a.finalised_at`).
+		// Unfinalised first, then by pickup: what needs attention floats up,
+		// and within that the truck leaving soonest comes first.
+		Order("a.finalised_at NULLS FIRST, o.pickup_at ASC NULLS LAST").
+		Offset(offset).Limit(limit).
+		Scan(&rows).Error
+	return rows, total, err
+}
