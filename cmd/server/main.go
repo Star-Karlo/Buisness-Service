@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/karlo/business-service/internal/platform/dbmigrate"
 	"log/slog"
 	"net/http"
 	"os"
@@ -25,8 +26,8 @@ import (
 	"github.com/karlo/business-service/internal/repository"
 	"github.com/karlo/business-service/internal/routes"
 	"github.com/karlo/business-service/internal/routing"
-	"github.com/karlo/business-service/internal/storage"
 	"github.com/karlo/business-service/internal/services"
+	"github.com/karlo/business-service/internal/storage"
 	"github.com/karlo/business-service/internal/telemetry"
 )
 
@@ -57,6 +58,20 @@ func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+
+	// `server migrate`: bring the schema up to date and exit. Run as a one-off
+	// ECS task from the same image and secrets as the service, which is the
+	// only place RDS can be reached from. Exits non-zero on failure so the
+	// task — and whatever invoked it — sees the failure.
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		// /migrations is where the Dockerfile puts them. Overridable so the
+		// same command works from a checkout, where they are ./migrations.
+		dir := os.Getenv("MIGRATIONS_DIR")
+		if dir == "" {
+			dir = "/migrations"
+		}
+		return dbmigrate.Run(cfg.Database.DSN(), cfg.Database.Name, dir)
 	}
 
 	// Logs go to stdout as JSON, and additionally to Fluentd when
