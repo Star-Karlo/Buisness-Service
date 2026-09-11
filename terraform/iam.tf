@@ -92,6 +92,28 @@ resource "aws_iam_role_policy" "task_exec_access" {
   policy = data.aws_iam_policy_document.task[0].json
 }
 
+# --- Object storage --------------------------------------------------------
+#
+# The one AWS API the business service calls itself. It signs URLs for the
+# uploads bucket, which needs the same permissions the signed URL will exercise:
+# S3 checks the signer's rights at the moment the browser presents the URL.
+#
+# Scoped to this bucket and nothing else, and to objects rather than the bucket
+# itself — the service never lists, and a list grant is how a bug enumerates
+# every tenant's files.
+data "aws_iam_policy_document" "task_storage" {
+  statement {
+    actions   = ["s3:PutObject", "s3:GetObject"]
+    resources = ["${local.platform.uploads_bucket_arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "task_storage" {
+  name   = "${local.name}-storage"
+  role   = aws_iam_role.task.id
+  policy = data.aws_iam_policy_document.task_storage.json
+}
+
 # --- CodeBuild role ---------------------------------------------------------
 
 data "aws_iam_policy_document" "codebuild_assume" {

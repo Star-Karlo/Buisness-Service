@@ -52,6 +52,12 @@ resource "aws_ecs_task_definition" "main" {
           { name = "REDIS_TLS", value = "true" },
 
           { name = "FLUENTD_HOST", value = var.fluentd_host },
+
+          # Object storage for uploads. The bucket the platform created; the
+          # task role (iam.tf) is what lets this service sign against it, so
+          # there are no access keys to set — the SDK finds the role.
+          { name = "STORAGE_BUCKET", value = local.platform.uploads_bucket },
+          { name = "STORAGE_REGION", value = var.region },
           { name = "CORS_ALLOWED_ORIGINS", value = join(",", var.cors_allowed_origins) },
         ],
         var.extra_environment,
