@@ -115,23 +115,28 @@ variable "listener_priority" {
 
 variable "path_patterns" {
   description = "The paths this service claims on the shared load balancer."
+  # "/api/v1/orders*", NOT "/api/v1/orders/*". An ALB wildcard matches zero
+  # or more characters, so the first form covers the bare collection path
+  # and everything under it. The second REQUIRES the slash — the bare path,
+  # which is every list call, fell through to the frontend's catch-all and
+  # came back as an HTML 404.
   # These must match the Vite dev proxy in karlo_platform/vite.config.ts. A path
   # present in only one of the two works locally and 404s behind the load
   # balancer, or the reverse — and neither failure appears until the environment
   # the path is missing from is exercised.
   type        = list(string)
   default = [
-    "/api/v1/orders/*",
-    "/api/v1/shipments/*",
-    "/api/v1/agreements/*",
-    "/api/v1/invoices/*",
-    "/api/v1/routing/*",
-    "/api/v1/uploads/*",
+    "/api/v1/orders*",
+    "/api/v1/shipments*",
+    "/api/v1/agreements*",
+    "/api/v1/invoices*",
+    "/api/v1/routing*",
+    "/api/v1/uploads*",
     # Per-company form configuration. Added with the configurable-detail work;
     # it was missing from both this list and the Vite proxy, so the
     # configurator 404'd in the browser while working against the service
     # directly — exactly the split failure the note above warns about.
-    "/api/v1/config/*",
+    "/api/v1/config*",
   ]
 }
 
