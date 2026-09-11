@@ -35,6 +35,22 @@ type Config struct {
 	MasterDataGRPCAddr   string
 	NotificationGRPCAddr string
 
+	MapIDBaseURL string
+	MapIDKey     string
+
+	// Object storage for user uploads. An empty bucket disables uploads
+	// rather than failing at startup: every other feature works without them.
+	StorageBucket    string
+	StorageRegion    string
+	StorageEndpoint  string
+	StorageAccessKey string
+	StorageSecretKey string
+
+	// TelemetryBaseURL is the FMS tracking service. Empty disables live
+	// positions; dispatch then ranks on last unloading points instead.
+	TelemetryBaseURL string
+	TelemetryKey     string
+
 	CORSAllowedOrigins []string
 
 	// NotifyTimeout bounds an outbound notification call. Notifications are
@@ -90,6 +106,24 @@ func Load() (*Config, error) {
 		AuthGRPCAddr:         envOr("AUTH_GRPC_ADDR", "localhost:6001"),
 		MasterDataGRPCAddr:   envOr("MASTERDATA_GRPC_ADDR", "localhost:6002"),
 		NotificationGRPCAddr: envOr("NOTIFICATION_GRPC_ADDR", "localhost:6004"),
+
+		// Routing. The key is a credential and belongs on the server: routing is
+		// proxied through this service precisely so it never reaches a browser
+		// bundle, where it would be readable by every visitor.
+		MapIDBaseURL: envOr("MAPID_BASE_URL", "https://routing.mapid.io/"),
+		MapIDKey:     envOr("MAPID_KEY", ""),
+
+		StorageBucket:    envOr("STORAGE_BUCKET", ""),
+		StorageRegion:    envOr("STORAGE_REGION", "ap-southeast-3"),
+		StorageEndpoint:  envOr("STORAGE_ENDPOINT", ""),
+		StorageAccessKey: envOr("STORAGE_ACCESS_KEY", ""),
+		StorageSecretKey: envOr("STORAGE_SECRET_KEY", ""),
+
+		// Telemetry. Optional by design: an empty base URL leaves dispatch
+		// ranking trucks by their last unloading point, which is correct for a
+		// parked truck and the behaviour this service had before.
+		TelemetryBaseURL: envOr("TELEMETRY_BASE_URL", "https://fms-tracking.karlo.id"),
+		TelemetryKey:     envOr("TELEMETRY_INGEST_KEY", ""),
 
 		CORSAllowedOrigins: splitOr("CORS_ALLOWED_ORIGINS", nil),
 		NotifyTimeout:      durationOr("NOTIFY_TIMEOUT", 5*time.Second),

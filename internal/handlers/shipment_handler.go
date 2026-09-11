@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/karlo/business-service/internal/models"
+	"github.com/karlo/business-service/internal/platform/authctx"
 	"github.com/karlo/business-service/internal/platform/response"
 	"github.com/karlo/business-service/internal/services"
 )
@@ -49,6 +52,10 @@ func (h *ShipmentHandler) Advance(c *gin.Context) {
 	var req advanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if !allowStatusChange(c, req.Status, models.PermissionForShipmentStatus) {
 		return
 	}
 
@@ -124,8 +131,17 @@ func (h *ShipmentHandler) NextStates(c *gin.Context) {
 	}
 
 	next := models.NextShipmentStates(shipment.StatusCode, actor.Role)
+
+	// Same filtering as the order transitions, and for the same reason: a
+	// client renders buttons from this list, so an entry the caller cannot
+	// perform becomes a button that 403s. It matters more here — the two
+	// approval steps are held by the warehouse and the movement steps by the
+	// driver, so an unfiltered list offers each of them the other's actions.
 	out := make([]gin.H, 0, len(next))
 	for _, s := range next {
+		if !callerMayReachShipment(c, s) {
+			continue
+		}
 		out = append(out, gin.H{
 			"status": s,
 			"label":  models.StatusLabel(models.DomainShipment, s),
@@ -213,4 +229,20 @@ func (h *ShipmentHandler) Documents(c *gin.Context) {
 	}
 
 	response.OK(c, docs)
+}
+
+// callerMayReachShipment reports whether this caller holds the permission a
+// shipment status change requires, sharing its lookup with allowStatusChange so
+// the offer and the refusal cannot disagree.
+func callerMayReachShipment(c *gin.Context, status string) bool {
+	key, known := models.PermissionForShipmentStatus(status)
+	if !known {
+		return false
+	}
+	principal, ok := authctx.Gin(c)
+	if !ok {
+		return false
+	}
+	module, action, found := strings.Cut(key, ".")
+	return found && principal.HasModule(module, action)
 }

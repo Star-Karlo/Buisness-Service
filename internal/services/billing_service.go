@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/karlo/business-service/internal/clients"
+	"github.com/karlo/business-service/internal/fieldconfig"
 	"github.com/karlo/business-service/internal/models"
 	notificationv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/notification/v1"
 	"github.com/karlo/business-service/internal/platform/query"
@@ -26,7 +28,25 @@ type BillingService struct {
 	orders     *repository.OrderRepository
 	auth       *clients.Auth
 	notifier   clients.Notifier
+
+	// dispatch resolves warehouse coordinates and holds the route cache, so an
+	// agreement's lanes can be measured. Attached after construction for the
+	// same reason as on OrderService: both need the order repository this
+	// service also owns, and a constructor argument would be a cycle.
+	dispatch *DispatchService
+
+	// fields enforces the company's form configuration. Attached after
+	// construction rather than injected, the same way OrderService takes
+	// dispatch: nil-checked at use, so a deployment that has not wired it
+	// still creates agreements — without the per-company check.
+	fields *FieldConfigService
 }
+
+// WithFieldConfig attaches the per-company field check.
+func (s *BillingService) WithFieldConfig(f *FieldConfigService) { s.fields = f }
+
+// WithDispatch attaches route planning, so agreement lanes can be measured.
+func (s *BillingService) WithDispatch(d *DispatchService) { s.dispatch = d }
 
 func NewBillingService(
 	agreements *repository.AgreementRepository,
@@ -57,17 +77,52 @@ type CreateAgreementInput struct {
 	CurrencyID           string
 	Detail               map[string]interface{}
 	Rates                []RateInput
+
+	// Customers are the clients this agreement covers.
+	//
+	// Empty means it covers only the counterparty it was struck with, which is
+	// the ordinary single-client agreement. A framework contract names several.
+	Customers []CustomerInput
+
+	// Present names the payload keys the caller actually supplied, for the
+	// per-company field check. Built by the handler from the raw JSON rather
+	// than inferred here: "supplied" and "non-zero" are different questions,
+	// and a struct cannot tell an omitted price from a price of nought.
+	Present map[string]bool
+}
+
+// CustomerInput is one client an agreement covers.
+type CustomerInput struct {
+	CompanyID uuid.UUID
+	// Label is what this client is called on this contract, when it differs
+	// from the company's own name.
+	Label string
 }
 
 // RateInput is one price line.
 type RateInput struct {
+	// CustomerCompanyID narrows this lane to one client. Zero means every
+	// customer the agreement covers, which is the ordinary case.
+	CustomerCompanyID *uuid.UUID
+
+	// Warehouse ids make this a warehouse-level lane — the only kind that can
+	// be routed, because a city pair has no coordinates to measure between.
+	OriginWarehouseID      string
+	DestinationWarehouseID string
+
 	OriginCityID      string
 	DestinationCityID string
-	TruckTypeID       string
-	PricingTypeID     string
-	Price             decimal.Decimal
-	MinQuantity       *decimal.Decimal
-	LeadTimeHours     *int
+
+	// Kecamatan. Empty for the companies that price city to city, which is
+	// most of them.
+	OriginDistrictID      string
+	DestinationDistrictID string
+
+	TruckTypeID   string
+	PricingTypeID string
+	Price         decimal.Decimal
+	MinQuantity   *decimal.Decimal
+	LeadTimeHours *int
 }
 
 // CreateAgreement records a negotiated contract.
@@ -81,13 +136,24 @@ func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in Cr
 	if len(in.Rates) == 0 {
 		return nil, fmt.Errorf("%w: an agreement needs at least one rate", ErrValidation)
 	}
+
+	// The company's own form configuration. Checked HERE rather than only in
+	// the browser, because the form is not the only caller: the API is public
+	// to anyone holding a token, and a rule enforced only by the page that
+	// renders it is not a rule.
+	if s.fields != nil {
+		if err := s.fields.Validate(ctx, actor.CompanyID,
+			fieldconfig.EntityAgreement, in.Present); err != nil {
+			return nil, err
+		}
+	}
 	for i, r := range in.Rates {
 		if r.Price.IsNegative() {
 			return nil, fmt.Errorf("%w: rate %d has a negative price", ErrValidation, i)
 		}
 	}
 
-	number, err := s.nextNumber(ctx, "agreement", "AGR")
+	number, err := s.agreementNumber(ctx, in.TransporterCompanyID, actor.CompanyID)
 	if err != nil {
 		return nil, err
 	}
@@ -114,17 +180,44 @@ func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in Cr
 			MinQuantity:   r.MinQuantity,
 			LeadTimeHours: r.LeadTimeHours,
 		}
+		setIfNotEmpty(&rate.OriginWarehouseID, r.OriginWarehouseID)
+		setIfNotEmpty(&rate.DestinationWarehouseID, r.DestinationWarehouseID)
 		setIfNotEmpty(&rate.OriginCityID, r.OriginCityID)
 		setIfNotEmpty(&rate.DestinationCityID, r.DestinationCityID)
+		setIfNotEmpty(&rate.OriginDistrictID, r.OriginDistrictID)
+		setIfNotEmpty(&rate.DestinationDistrictID, r.DestinationDistrictID)
 		setIfNotEmpty(&rate.TruckTypeID, r.TruckTypeID)
 		setIfNotEmpty(&rate.PricingTypeID, r.PricingTypeID)
 		setIfNotEmpty(&rate.CurrencyID, in.CurrencyID)
+		rate.CustomerCompanyID = r.CustomerCompanyID
 		agreement.Rates = append(agreement.Rates, rate)
+	}
+
+	// Who the agreement covers. The counterparty is always one of them —
+	// omitting it would make the ordinary single-client agreement cover nobody,
+	// and every lookup by customer would miss it.
+	covered := map[uuid.UUID]string{actor.CompanyID: ""}
+	for _, c := range in.Customers {
+		if c.CompanyID != uuid.Nil {
+			covered[c.CompanyID] = c.Label
+		}
+	}
+	for id, label := range covered {
+		entry := models.AgreementCustomer{CustomerCompanyID: id}
+		if label != "" {
+			entry.Label = &label
+		}
+		agreement.Customers = append(agreement.Customers, entry)
 	}
 
 	if err := s.agreements.Create(ctx, agreement); err != nil {
 		return nil, err
 	}
+
+	// Measure the lanes. Done after the write and not inside it: a contract
+	// with an unrouted lane is still a contract, and refusing one because MAPID
+	// was briefly unwell would lose a sale to somebody else's outage.
+	s.RouteLanes(ctx, agreement.ID)
 
 	s.notifier.Notify(ctx, clients.Event{
 		Type:           notificationv1.EventType_EVENT_TYPE_AGREEMENT_CREATED,
@@ -149,7 +242,29 @@ func (s *BillingService) GetAgreementForService(ctx context.Context, id uuid.UUI
 
 // ListAgreements pages the caller's contracts.
 func (s *BillingService) ListAgreements(ctx context.Context, actor Actor, p query.Params) ([]models.Agreement, int64, error) {
-	return s.agreements.List(ctx, actor.CompanyID, p)
+	rows, total, err := s.agreements.List(ctx, actor.CompanyID, p)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.nameCompaniesOnAgreements(ctx, rows)
+	return rows, total, nil
+}
+
+// nameCompaniesOnAgreements fills in the two company names an agreement holds
+// only as ids, so a list does not render a column of UUIDs.
+func (s *BillingService) nameCompaniesOnAgreements(ctx context.Context, rows []models.Agreement) {
+	if s.auth == nil || len(rows) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(rows)*2)
+	for i := range rows {
+		ids = append(ids, rows[i].ShipperCompanyID.String(), rows[i].TransporterCompanyID.String())
+	}
+	names := s.auth.CompanyNames(ctx, ids)
+	for i := range rows {
+		rows[i].ShipperCompanyName = names[rows[i].ShipperCompanyID.String()]
+		rows[i].TransporterCompanyName = names[rows[i].TransporterCompanyID.String()]
+	}
 }
 
 // DecideAgreement approves or rejects a submitted contract.
@@ -364,7 +479,30 @@ func (s *BillingService) GetInvoiceForService(ctx context.Context, id uuid.UUID)
 
 // ListInvoices pages the caller's bills.
 func (s *BillingService) ListInvoices(ctx context.Context, actor Actor, p query.Params) ([]models.Invoice, int64, error) {
-	return s.invoices.List(ctx, actor.CompanyID, p)
+	rows, total, err := s.invoices.List(ctx, actor.CompanyID, p)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.nameCompaniesOnInvoices(ctx, rows)
+	return rows, total, nil
+}
+
+// nameCompaniesOnInvoices does for invoices what nameCompaniesOnAgreements does
+// for agreements. A bill naming only ids is unreadable, and on an invoice the
+// two sides matter more than anywhere else: it says who owes whom.
+func (s *BillingService) nameCompaniesOnInvoices(ctx context.Context, rows []models.Invoice) {
+	if s.auth == nil || len(rows) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(rows)*2)
+	for i := range rows {
+		ids = append(ids, rows[i].ShipperCompanyID.String(), rows[i].TransporterCompanyID.String())
+	}
+	names := s.auth.CompanyNames(ctx, ids)
+	for i := range rows {
+		rows[i].ShipperCompanyName = names[rows[i].ShipperCompanyID.String()]
+		rows[i].TransporterCompanyName = names[rows[i].TransporterCompanyID.String()]
+	}
 }
 
 // invoiceTransitions is the invoice state machine. It lives here rather than in
@@ -477,6 +615,45 @@ func (s *BillingService) nextNumber(ctx context.Context, scope, prefix string) (
 		return "", err
 	}
 	return fmt.Sprintf("%s-%s-%06d", prefix, period, seq), nil
+}
+
+// agreementNumber builds AGR-<transporter>-<client>-000001.
+//
+// The two codes are what make the number worth reading: a counterparty can say
+// "AGR-SKI-SMS-000001" over the phone and both sides know which contract and
+// with whom. The previous format, AGR-2026-000001, was unique and said nothing.
+//
+// The sequence is what guarantees uniqueness, NOT the codes — two companies may
+// share three letters, and refusing a registration over that would be a
+// cosmetic rule with a commercial cost. So the codes are decoration on a unique
+// number rather than part of the key.
+//
+// A company whose code cannot be resolved falls back to the year, which keeps
+// the old shape rather than producing AGR--SMS-000001. Numbering must not fail
+// because the authentication service was briefly unreachable.
+func (s *BillingService) agreementNumber(ctx context.Context, transporterID, clientID uuid.UUID) (string, error) {
+	seq, err := s.orders.NextNumber(ctx, "agreement", time.Now().Format("2006"))
+	if err != nil {
+		return "", err
+	}
+
+	profiles := s.auth.CompanyProfiles(ctx, []string{transporterID.String(), clientID.String()})
+
+	code := func(id uuid.UUID) string {
+		if p, ok := profiles[id.String()]; ok && p.Abbreviation != "" {
+			return p.Abbreviation
+		}
+		return ""
+	}
+
+	transporter, client := code(transporterID), code(clientID)
+	if transporter == "" || client == "" {
+		slog.WarnContext(ctx, "agreement numbered without company codes",
+			"transporterId", transporterID, "clientId", clientID)
+		return fmt.Sprintf("AGR-%s-%06d", time.Now().Format("2006"), seq), nil
+	}
+
+	return fmt.Sprintf("AGR-%s-%s-%06d", transporter, client, seq), nil
 }
 
 var _ = errors.Is

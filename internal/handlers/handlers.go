@@ -7,6 +7,8 @@ package handlers
 
 import (
 	"errors"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,22 +32,43 @@ func NewOrderHandler(orders *services.OrderService) *OrderHandler {
 }
 
 type createOrderRequest struct {
-	AgreementID            string           `json:"agreementId"`
-	TransporterCompanyID   string           `json:"transporterCompanyId"`
-	OrderKind              string           `json:"orderKind"`
-	OriginWarehouseID      string           `json:"originWarehouseId"`
-	DestinationWarehouseID string           `json:"destinationWarehouseId"`
-	CargoTypeID            string           `json:"cargoTypeId"`
-	ItemTypeID             string           `json:"itemTypeId"`
-	Quantity               *decimal.Decimal `json:"quantity"`
-	WeightKg               *decimal.Decimal `json:"weightKg"`
-	VolumeM3               *decimal.Decimal `json:"volumeM3"`
-	PickupAt               *time.Time       `json:"pickupAt"`
-	DeliveryAt             *time.Time       `json:"deliveryAt"`
-	CustomerID             string           `json:"customerId"`
-	ReferenceNumber        string           `json:"referenceNumber"`
-	Detail                 map[string]any   `json:"detail"`
-	Submit                 bool             `json:"submit"`
+	AgreementID            string             `json:"agreementId"`
+	TransporterCompanyID   string             `json:"transporterCompanyId"`
+	OrderKind              string             `json:"orderKind"`
+	OriginWarehouseID      string             `json:"originWarehouseId"`
+	DestinationWarehouseID string             `json:"destinationWarehouseId"`
+	CargoTypeID            string             `json:"cargoTypeId"`
+	ItemTypeID             string             `json:"itemTypeId"`
+	Quantity               *decimal.Decimal   `json:"quantity"`
+	WeightKg               *decimal.Decimal   `json:"weightKg"`
+	VolumeM3               *decimal.Decimal   `json:"volumeM3"`
+	PickupAt               *time.Time         `json:"pickupAt"`
+	DeliveryAt             *time.Time         `json:"deliveryAt"`
+	ExpiresAt              *time.Time         `json:"expiresAt"`
+	CustomerID             string             `json:"customerId"`
+	ReferenceNumber        string             `json:"referenceNumber"`
+	Detail                 map[string]any     `json:"detail"`
+	Items                  []orderItemRequest `json:"items"`
+	Submit                 bool               `json:"submit"`
+}
+
+// orderItemRequest is one line of itemised cargo, for the companies whose
+// configuration enables it.
+//
+// Volume is deliberately absent: it is derived from the dimensions by the
+// service and stored, so a client cannot submit a volume that disagrees with
+// its own measurements.
+type orderItemRequest struct {
+	CatalogItemID string           `json:"catalogItemId"`
+	Name          string           `json:"name"`
+	Quantity      *decimal.Decimal `json:"quantity"`
+	Unit          string           `json:"unit"`
+	Packaging     string           `json:"packaging"`
+	WeightKg      *decimal.Decimal `json:"weightKg"`
+	LengthCm      *decimal.Decimal `json:"lengthCm"`
+	WidthCm       *decimal.Decimal `json:"widthCm"`
+	HeightCm      *decimal.Decimal `json:"heightCm"`
+	HandlingNotes string           `json:"handlingNotes"`
 }
 
 // Create places an order.
@@ -61,13 +84,38 @@ func (h *OrderHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Read the raw body before binding, to record which keys were actually
+	// supplied. Binding alone cannot answer that: an omitted quantity and a
+	// quantity of zero both leave the field at its zero value, and the
+	// per-company field check needs to tell them apart.
+	present := presentKeys(buffered(c.Request))
+
 	var req createOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 
+	items := make([]services.OrderItemInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, services.OrderItemInput{
+			CatalogItemID: item.CatalogItemID,
+			Name:          item.Name,
+			Quantity:      item.Quantity,
+			Unit:          item.Unit,
+			Packaging:     item.Packaging,
+			WeightKg:      item.WeightKg,
+			LengthCm:      item.LengthCm,
+			WidthCm:       item.WidthCm,
+			HeightCm:      item.HeightCm,
+			HandlingNotes: item.HandlingNotes,
+		})
+	}
+
 	in := services.CreateOrderInput{
+		Present:                present,
+		Items:                  items,
+		ExpiresAt:              req.ExpiresAt,
 		OrderKind:              req.OrderKind,
 		OriginWarehouseID:      req.OriginWarehouseID,
 		DestinationWarehouseID: req.DestinationWarehouseID,
@@ -124,6 +172,9 @@ func (h *OrderHandler) List(c *gin.Context) {
 	}
 
 	params := parseQuery(c, repository.OrderFields())
+	if badQuery(c, params) {
+		return
+	}
 
 	orders, total, err := h.orders.List(c.Request.Context(), actor, params)
 	if err != nil {
@@ -221,6 +272,10 @@ func (h *OrderHandler) Transition(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if !allowStatusChange(c, body.Status, models.PermissionForOrderStatus) {
 		return
 	}
 
@@ -327,9 +382,25 @@ func (h *OrderHandler) NextStates(c *gin.Context) {
 		return
 	}
 
+	// The state machine says which moves are legal from here for this role.
+	// That is not the same question the caller is asking.
 	next := models.NextOrderStates(order.StatusCode, actor.Role)
+
+	// Clients render action buttons directly from this list, so anything left
+	// in it that the caller cannot actually perform becomes a button that
+	// fails on click. A member granted order.read and order.create but not
+	// order.cancel was being offered Cancel, and got a 403 when they used it —
+	// which reads as a broken system rather than as a permission they were
+	// never given.
+	//
+	// Filtered against the SAME map the transition itself enforces, so the two
+	// answers cannot drift: if a status is unreachable here it is refused
+	// there, and the reverse.
 	out := make([]gin.H, 0, len(next))
 	for _, s := range next {
+		if !callerMayReach(c, s) {
+			continue
+		}
 		out = append(out, gin.H{
 			"status": s,
 			"label":  models.StatusLabel(models.DomainOrder, s),
@@ -387,7 +458,94 @@ func callerActor(c *gin.Context) (services.Actor, bool) {
 		return services.Actor{}, false
 	}
 
-	return services.Actor{UserID: userID, CompanyID: companyID, Role: principal.Role()}, true
+	actor := services.Actor{
+		UserID:        userID,
+		CompanyID:     companyID,
+		Role:          principal.Role(),
+		PlatformStaff: principal.IsPlatformStaff,
+	}
+
+	// Acting for a client.
+	//
+	// A header rather than a field on every payload, because "who am I acting
+	// as" is the same question on a create, an edit and a read — putting it in
+	// the body would mean adding it to a dozen request shapes and forgetting it
+	// on the reads.
+	if target := strings.TrimSpace(c.GetHeader(actingForHeader)); target != "" {
+		if !actor.PlatformStaff {
+			// Not a mistake to be tolerated: a company naming another would be
+			// reading and writing that company's data.
+			response.Forbidden(c, "Only Karlo staff may act on another company's behalf.")
+			return services.Actor{}, false
+		}
+		onBehalfOf, err := uuid.Parse(target)
+		if err != nil {
+			response.BadRequest(c, "Invalid "+actingForHeader+" header")
+			return services.Actor{}, false
+		}
+		if onBehalfOf != companyID {
+			actor.CompanyID = onBehalfOf
+			actor.ActingFor = true
+		}
+	}
+
+	return actor, true
+}
+
+// actingForHeader names the company a Karlo staff member is acting for.
+//
+// Its absence means "myself", which is what every ordinary request sends.
+const actingForHeader = "X-Acting-For"
+
+// callerMayReach reports whether this caller holds the permission a status
+// change requires, without writing anything.
+//
+// It shares its lookup with allowStatusChange deliberately. Offering a move and
+// then refusing it are the same decision asked at two moments, and answering
+// them from two different places is how a UI ends up advertising actions the
+// server rejects.
+func callerMayReach(c *gin.Context, status string) bool {
+	key, known := models.PermissionForOrderStatus(status)
+	if !known {
+		return false
+	}
+	principal, ok := authctx.Gin(c)
+	if !ok {
+		return false
+	}
+	module, action, found := strings.Cut(key, ".")
+	return found && principal.HasModule(module, action)
+}
+
+// allowStatusChange refuses a status change the caller has no permission for.
+//
+// The route guards cannot do this. A status endpoint takes its target from the
+// request body, so one URL covers transitions as different as submitting an
+// order and cancelling one, and RequireModule is fixed at registration time.
+// The check therefore has to happen here, once the body is parsed.
+//
+// lookup is models.PermissionForOrderStatus or its shipment counterpart. An
+// unmapped target status is refused, so adding a status without deciding who
+// may reach it fails closed rather than open.
+func allowStatusChange(c *gin.Context, to string, lookup func(string) (string, bool)) bool {
+	key, known := lookup(to)
+	if !known {
+		response.BadRequest(c, "Unknown status: "+to)
+		return false
+	}
+
+	principal, ok := authctx.Gin(c)
+	if !ok {
+		response.Unauthorized(c, "No token provided.")
+		return false
+	}
+
+	module, action, found := strings.Cut(key, ".")
+	if !found || !principal.HasModule(module, action) {
+		response.Forbidden(c, "Access Denied")
+		return false
+	}
+	return true
 }
 
 func pathUUID(c *gin.Context, name string) (uuid.UUID, bool) {
@@ -399,6 +557,12 @@ func pathUUID(c *gin.Context, name string) (uuid.UUID, bool) {
 	return id, true
 }
 
+// parseQuery normalises a listing request.
+//
+// The caller must check params.Err before using the result — badQuery does
+// that and answers 400. A filter the server does not understand must never be
+// silently dropped: the response would be 200 with real rows and only the
+// count wrong, which is far harder to notice than an error.
 func parseQuery(c *gin.Context, fields query.FieldSet) query.Params {
 	return query.Parse(
 		c.DefaultQuery("page", "0"),
@@ -434,7 +598,24 @@ func writeError(c *gin.Context, err error) {
 		response.Conflict(c, err.Error())
 	case errors.Is(err, services.ErrValidation):
 		response.BadRequest(c, err.Error())
+	// 402 rather than 403: the company has not bought this, which a sales
+	// conversation fixes. A 403 would send the user to their administrator,
+	// who has nothing to grant.
+	case errors.Is(err, services.ErrNotEntitled):
+		c.AbortWithStatusJSON(http.StatusPaymentRequired, gin.H{
+			"success": false, "message": err.Error(),
+		})
 	default:
 		response.InternalError(c, "Request failed")
 	}
+}
+
+// badQuery answers 400 when a listing request could not be understood, and
+// reports whether the handler should stop.
+func badQuery(c *gin.Context, p query.Params) bool {
+	if p.Err == nil {
+		return false
+	}
+	response.BadRequest(c, p.Err.Error())
+	return true
 }

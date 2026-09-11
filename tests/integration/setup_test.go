@@ -18,6 +18,7 @@ package integration
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,20 @@ func testDB(t *testing.T) *gorm.DB {
 	dsn := os.Getenv("BUSINESS_TEST_DSN")
 	if dsn == "" {
 		t.Skip("BUSINESS_TEST_DSN is not set; skipping integration tests")
+	}
+
+	// This suite TRUNCATEs orders, agreements and invoices. Pointed at the
+	// development database it destroys the seed data, and the damage is
+	// invisible until someone opens the order list. The database must be one
+	// created for testing, so its name has to say so.
+	//
+	// Naming is a weak check, but it is the only signal available: the test
+	// database and the development one are the same server, the same user and
+	// the same schema, and nothing else distinguishes them.
+	if !strings.Contains(dsn, "_test") {
+		t.Fatalf("BUSINESS_TEST_DSN must name a database containing \"_test\": this "+
+			"suite truncates orders and agreements, and %q looks like a database "+
+			"somebody is using.", redactDSN(dsn))
 	}
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
@@ -69,6 +84,16 @@ func testDB(t *testing.T) *gorm.DB {
 // TRUNCATE ... CASCADE rather than DELETE: it resets the tables and their
 // dependants in one statement, and leaves no rows behind to make a later test's
 // assertions ambiguous.
+// redactDSN strips the password before a DSN reaches a test log.
+func redactDSN(dsn string) string {
+	if at := strings.LastIndex(dsn, "@"); at != -1 {
+		if scheme := strings.Index(dsn, "://"); scheme != -1 && scheme+3 < at {
+			return dsn[:scheme+3] + "***" + dsn[at:]
+		}
+	}
+	return dsn
+}
+
 func resetTables(t *testing.T, db *gorm.DB) {
 	t.Helper()
 

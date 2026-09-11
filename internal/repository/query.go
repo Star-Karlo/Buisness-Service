@@ -22,7 +22,11 @@ func applyFilters(q *gorm.DB, p query.Params) *gorm.DB {
 		case query.OpLike:
 			q = q.Where(col+" ILIKE ?", "%"+f.Value+"%")
 		case query.OpIn:
-			q = q.Where(col+" IN ?", strings.Split(f.Value, ","))
+			// Values is already normalised: an array arrives as-is, a
+			// comma-separated string is split. Splitting Value here instead
+			// meant an array value became one string containing a comma, and
+			// `IN ('draft,submitted')` matched nothing while returning 200.
+			q = q.Where(col+" IN ?", f.Values)
 		case query.OpGt:
 			q = q.Where(col+" > ?", f.Value)
 		case query.OpGte:

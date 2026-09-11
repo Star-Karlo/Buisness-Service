@@ -3,11 +3,13 @@ package clients
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/karlo/business-service/internal/platform/authctx"
 	"github.com/karlo/business-service/internal/platform/cache"
 	authv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/auth/v1"
+	commonv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/common/v1"
 	masterdatav1 "github.com/karlo/business-service/internal/platform/genproto/karlo/masterdata/v1"
 	"github.com/karlo/business-service/internal/platform/grpcutil"
 	"google.golang.org/grpc"
@@ -55,9 +57,7 @@ func principalFrom(user *authv1.User) authctx.Principal {
 	p := authctx.Principal{
 		UserID:          user.GetId(),
 		CompanyID:       user.GetCompanyId(),
-		ParentID:        user.GetParentId(),
 		IsPlatformStaff: user.GetIsPlatformStaff(),
-		FMSTenantID:     user.GetFmsTenantId(),
 	}
 
 	if access := user.GetAccess(); len(access) > 0 {
@@ -67,6 +67,10 @@ func principalFrom(user *authv1.User) authctx.Principal {
 				Role:        a.GetRole(),
 				Permissions: a.GetPermissions(),
 				Features:    a.GetFeatures(),
+				// Carried across the wire. Without it an administrator rebuilt
+				// from a remote validation arrives with an empty permission
+				// list and is refused everywhere — which is what happened.
+				GrantsAll: a.GetGrantsAll(),
 			}
 		}
 	}
@@ -206,4 +210,102 @@ func (m *MasterData) ValidateCatalogRefs(ctx context.Context, companyID string, 
 		return fmt.Errorf("clients: unknown master data references: %v", names)
 	}
 	return nil
+}
+
+// CompanyNames resolves company ids to display names.
+//
+// Agreements and invoices name two companies each, by id. A list rendered from
+// those ids shows a column of UUIDs, which is worse than showing nothing — so
+// the names are resolved here rather than leaving every client to fetch them
+// one row at a time.
+//
+// Deduplicated: a page of agreements between the same two companies costs two
+// lookups, not two per row. Failures are skipped rather than returned, because
+// a missing name should leave a blank cell, not take the list down.
+// CompanyProfile is the little a caller usually needs about a counterparty.
+type CompanyProfile struct {
+	Name string
+	// Abbreviation is the code that appears in agreement numbers. Empty when
+	// the company has none, which callers must handle rather than assume.
+	Abbreviation string
+}
+
+// CompanyProfiles resolves several companies at once.
+//
+// Separate from CompanyNames because agreement numbering needs the code as well
+// as the name, and a second round trip per company to fetch it would double the
+// calls on a path that already runs per agreement created.
+func (a *Auth) CompanyProfiles(ctx context.Context, ids []string) map[string]CompanyProfile {
+	out := make(map[string]CompanyProfile, len(ids))
+	seen := map[string]bool{}
+
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+
+		resp, err := a.client.GetCompany(ctx, &authv1.GetCompanyRequest{Id: id})
+		if err != nil {
+			slog.WarnContext(ctx, "could not resolve a company",
+				"company_id", id, "error", err)
+			continue
+		}
+		if c := resp.GetCompany(); c != nil {
+			out[id] = CompanyProfile{Name: c.GetName(), Abbreviation: c.GetAbbreviation()}
+		}
+	}
+	return out
+}
+
+func (a *Auth) CompanyNames(ctx context.Context, ids []string) map[string]string {
+	out := make(map[string]string, len(ids))
+	seen := map[string]bool{}
+
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+
+		resp, err := a.client.GetCompany(ctx, &authv1.GetCompanyRequest{Id: id})
+		if err != nil {
+			slog.WarnContext(ctx, "could not resolve a company name",
+				"company_id", id, "error", err)
+			continue
+		}
+		if c := resp.GetCompany(); c != nil {
+			out[id] = c.GetName()
+		}
+	}
+	return out
+}
+
+// ListAvailableTrucks returns the company's trucks that are free to take work.
+//
+// Availability is filtered at master data rather than here: the fleet is that
+// service's to describe, and pulling every truck back to discard most of them
+// would grow with the fleet while the useful answer does not.
+//
+// The page size is a deliberate ceiling rather than a full listing. A planner
+// choosing a truck for one order is choosing from the nearest handful; a
+// company with more trucks than this has a fleet whose selection needs
+// filtering by depot or group, which is a product decision rather than
+// something a bigger page silently papers over.
+func (m *MasterData) ListAvailableTrucks(ctx context.Context, companyID string) ([]*masterdatav1.Truck, error) {
+	const maxCandidates = 500
+
+	resp, err := m.client.ListTrucks(ctx, &masterdatav1.ListTrucksRequest{
+		CompanyId: companyID,
+		Query: &commonv1.Query{
+			Page: &commonv1.Page{Page: 1, PageSize: maxCandidates},
+			Filtered: []*commonv1.Filter{
+				{Id: "isAvailable", Value: "true", Operator: commonv1.Operator_OPERATOR_EQ},
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("clients: list trucks: %w", err)
+	}
+	return resp.GetTrucks(), nil
 }

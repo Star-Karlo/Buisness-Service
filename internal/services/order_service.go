@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/karlo/business-service/internal/clients"
+	"github.com/karlo/business-service/internal/fieldconfig"
 	"github.com/karlo/business-service/internal/models"
 	notificationv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/notification/v1"
 	"github.com/karlo/business-service/internal/platform/query"
@@ -27,10 +29,25 @@ var (
 )
 
 // Actor is the caller performing an operation, resolved from their token.
+//
+// CompanyID is the company being ACTED FOR, which is normally the caller's own.
+// Karlo staff may act for a client — recording an order on their behalf, or
+// configuring their forms — and then CompanyID is the client's while UserID
+// stays the staff member's. Keeping them apart is what makes the audit trail
+// honest: the order belongs to the client, and the person who typed it is still
+// recorded.
 type Actor struct {
 	UserID    uuid.UUID
 	CompanyID uuid.UUID
 	Role      string
+
+	// PlatformStaff marks a Karlo employee, who may act across tenants.
+	PlatformStaff bool
+
+	// ActingFor is set when CompanyID is NOT the caller's own company. Notified
+	// parties and history entries can then say so rather than presenting the
+	// action as the client's own.
+	ActingFor bool
 }
 
 // OrderService owns the order lifecycle.
@@ -41,6 +58,28 @@ type OrderService struct {
 	auth       *clients.Auth
 	masterdata *clients.MasterData
 	notifier   clients.Notifier
+
+	// fields enforces the company's form configuration; items stores itemised
+	// cargo. Both attached after construction, for the same reason as dispatch.
+	fields *FieldConfigService
+	items  *repository.OrderItemRepository
+
+	// dispatch plans the haul route when an order is created. Set after
+	// construction rather than injected, because DispatchService needs the
+	// order repository this service also owns; passing each into the other's
+	// constructor is a cycle. Nil-checked at every use, so a deployment that
+	// has not wired it still creates orders — without their routes.
+	dispatch *DispatchService
+}
+
+// WithDispatch attaches route planning. See the field comment for why this is
+// not a constructor argument.
+func (s *OrderService) WithDispatch(d *DispatchService) { s.dispatch = d }
+
+// WithFieldConfig attaches the per-company field check and item storage.
+func (s *OrderService) WithFieldConfig(f *FieldConfigService, items *repository.OrderItemRepository) {
+	s.fields = f
+	s.items = items
 }
 
 func NewOrderService(
@@ -75,11 +114,34 @@ type CreateOrderInput struct {
 	VolumeM3               *decimal.Decimal
 	PickupAt               *time.Time
 	DeliveryAt             *time.Time
+	ExpiresAt              *time.Time
 	CustomerID             string
 	ReferenceNumber        string
 	Detail                 map[string]interface{}
 	// SubmitImmediately skips the draft state for clients that have no draft UI.
 	SubmitImmediately bool
+
+	// Items is the itemised cargo, for the companies whose configuration
+	// enables it. Empty for those that name a category and stop.
+	Items []OrderItemInput
+
+	// Present names the payload keys the caller actually supplied, for the
+	// per-company field check. See CreateAgreementInput.Present.
+	Present map[string]bool
+}
+
+// OrderItemInput is one line of itemised cargo.
+type OrderItemInput struct {
+	CatalogItemID string
+	Name          string
+	Quantity      *decimal.Decimal
+	Unit          string
+	Packaging     string
+	WeightKg      *decimal.Decimal
+	LengthCm      *decimal.Decimal
+	WidthCm       *decimal.Decimal
+	HeightCm      *decimal.Decimal
+	HandlingNotes string
 }
 
 // Create places a new order.
@@ -113,6 +175,7 @@ func (s *OrderService) Create(ctx context.Context, actor Actor, in CreateOrderIn
 		StatusCode:           status,
 		PickupAt:             in.PickupAt,
 		DeliveryAt:           in.DeliveryAt,
+		ExpiresAt:            in.ExpiresAt,
 		Quantity:             in.Quantity,
 		WeightKg:             in.WeightKg,
 		VolumeM3:             in.VolumeM3,
@@ -138,6 +201,34 @@ func (s *OrderService) Create(ctx context.Context, actor Actor, in CreateOrderIn
 
 	if err := s.orders.Create(ctx, order); err != nil {
 		return nil, err
+	}
+
+	// Itemised cargo, for the companies whose configuration enables it.
+	//
+	// Written after the order rather than inside its transaction: the lines are
+	// supporting detail, and an order that exists without them is a form
+	// somebody can complete, while an order refused because one line was
+	// malformed loses everything typed. A failure is logged and the volume
+	// roll-up simply reads short.
+	if s.items != nil && len(in.Items) > 0 {
+		if err := s.items.ReplaceForOrder(ctx, order.ID, itemsFrom(in.Items)); err != nil {
+			slog.WarnContext(ctx, "order items not stored", "orderId", order.ID, "error", err)
+		}
+	}
+
+	// Plan the loading-to-unloading route. Known as soon as the order exists
+	// and independent of who ends up driving it, so it is done here rather than
+	// at assignment — which also means the planner's screen already has a
+	// distance when they first open it.
+	//
+	// A failure is logged, not returned. An order without a planned route is
+	// recoverable at any time; an order refused because MAPID was briefly
+	// unwell is a sale lost to somebody else's outage.
+	if s.dispatch != nil {
+		if err := s.dispatch.PlanHaul(ctx, order); err != nil {
+			slog.WarnContext(ctx, "haul route not planned",
+				"orderId", order.ID, "error", err)
+		}
 	}
 
 	if status == models.OrderSubmitted && order.TransporterCompanyID != nil {
@@ -180,6 +271,23 @@ func (s *OrderService) validateCreate(ctx context.Context, actor Actor, in Creat
 		return fmt.Errorf("%w: delivery cannot be before pickup", ErrValidation)
 	}
 
+	// An expiry after the loading time describes an order that may be actioned
+	// after the truck was due, which is not a schedule. The PRD states the rule
+	// in both directions in consecutive bullets; this is the reading that
+	// leaves the order actionable.
+	if in.ExpiresAt != nil && in.PickupAt != nil && in.ExpiresAt.After(*in.PickupAt) {
+		return fmt.Errorf("%w: the order expires after its loading time", ErrValidation)
+	}
+
+	// The company's own form configuration. Enforced here and not only in the
+	// browser: the API is reachable by anyone holding a token, and a rule the
+	// page enforces alone is not a rule.
+	if s.fields != nil {
+		if err := s.fields.Validate(ctx, actor.CompanyID, fieldconfig.EntityOrder, in.Present); err != nil {
+			return err
+		}
+	}
+
 	// Confirm the master data references exist before writing an order that
 	// points at them.
 	if err := s.masterdata.ValidateCatalogRefs(ctx, actor.CompanyID.String(), catalogRefs(in.CargoTypeID, in.ItemTypeID)); err != nil {
@@ -210,12 +318,128 @@ func (s *OrderService) applyAgreementPrice(ctx context.Context, actor Actor, ord
 
 	order.TransporterCompanyID = &agreement.TransporterCompanyID
 	order.CurrencyID = agreement.CurrencyID
+
+	// Record the lineage alongside the version. AgreementID names the version
+	// the price came from; without the root, an amendment leaves this order
+	// pointing at a superseded row and "every order under this contract"
+	// becomes a recursive walk instead of one indexed read.
+	root := agreement.RootAgreementID
+	if root == uuid.Nil {
+		// An agreement written before versioning existed is its own lineage.
+		root = agreement.ID
+	}
+	order.AgreementRootID = &root
+
+	// Resolve the contracted rate for this lane.
+	//
+	// The rate lives per origin-destination-trucktype line, and the order names
+	// warehouses rather than cities, so both ends are resolved through master
+	// data first. Until this existed the agreement set the transporter and the
+	// currency and left price NULL — so every agreement-backed order was
+	// unpriced, and the omission was invisible because nothing downstream
+	// insisted on a price until invoicing.
+	lane, ok := s.laneOf(ctx, order)
+	if !ok {
+		// No lane means no rate to look up. Left unpriced rather than refused:
+		// an empty repositioning order legitimately has no destination, and a
+		// warehouse missing its city is a master-data problem that should not
+		// block the order.
+		return nil
+	}
+
+	if order.TruckID != nil {
+		if truck, err := s.masterdata.GetTruck(ctx, *order.TruckID); err == nil {
+			lane.TruckTypeID = truck.GetTruckTypeId()
+		}
+	}
+
+	rate, err := s.agreements.FindRate(ctx, agreement.ID, lane)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			// The agreement exists but does not cover this lane. Refused,
+			// because the alternative is an order that looks contracted and
+			// carries no agreed price — which surfaces at invoicing, after the
+			// work is done and the argument is expensive.
+			return fmt.Errorf("%w: agreement %s has no rate for this lane",
+				ErrValidation, agreement.AgreementNumber)
+		}
+		return err
+	}
+
+	order.Price = &rate.Price
+	if rate.CurrencyID != nil {
+		order.CurrencyID = rate.CurrencyID
+	}
+	if rate.PricingTypeID != nil {
+		order.Detail["pricingTypeId"] = *rate.PricingTypeID
+	}
+	order.Detail["agreementRateId"] = rate.ID.String()
+
 	return nil
+}
+
+// laneOf resolves an order's warehouses to the lane its rates are keyed on.
+//
+// Reports false when either end cannot be resolved to a city, which leaves the
+// order unpriced rather than refused: a warehouse master data cannot return, or
+// one with no city recorded, is somebody's data to fix and should not stop an
+// order that is otherwise complete.
+//
+// The district pair is left EMPTY, which FindRate reads as "do not narrow by
+// district" — so a company pricing by kecamatan still resolves a rate here, it
+// simply gets the containing city's line rather than the kecamatan one.
+//
+// It is empty because master data cannot yet supply a district this can match
+// on, and the reason is a real inconsistency rather than a missing field. The
+// Site model records city, province and district as NAMES — there is no region
+// table, deliberately — while agreement_rates keys its lanes on catalogue ids
+// (`origin_city_id`, populated from the `kota` catalogue). Matching a name
+// against an id resolves nothing.
+//
+// So kecamatan lanes can be DEFINED on an agreement today and are matched when
+// the order names them, but they are not derived from the warehouse. Closing
+// that needs the city-id-versus-city-name split settled across the two
+// services, which is a decision larger than this function. Fabricating an id
+// here would produce a lane that silently matches nothing.
+func (s *OrderService) laneOf(ctx context.Context, order *models.Order) (repository.Lane, bool) {
+	resolve := func(id *string) string {
+		if id == nil {
+			return ""
+		}
+		wh, err := s.masterdata.GetWarehouse(ctx, *id)
+		if err != nil {
+			slog.WarnContext(ctx, "warehouse not resolved for pricing",
+				"warehouseId", *id, "error", err)
+			return ""
+		}
+		return wh.GetCityId()
+	}
+
+	lane := repository.Lane{
+		OriginCityID:      resolve(order.OriginWarehouseID),
+		DestinationCityID: resolve(order.DestinationWarehouseID),
+	}
+
+	// An order may name its own kecamatan even though the warehouse cannot
+	// supply one, which is how a company that prices below city level gets the
+	// specific rate: the form asks, and the value rides in detail.
+	lane.OriginDistrictID = stringFromDetail(order.Detail, "originDistrictId")
+	lane.DestinationDistrictID = stringFromDetail(order.Detail, "destinationDistrictId")
+
+	return lane, lane.OriginCityID != "" && lane.DestinationCityID != ""
 }
 
 // Get resolves an order the caller's company is party to.
 func (s *OrderService) Get(ctx context.Context, actor Actor, id uuid.UUID) (*models.Order, error) {
-	return s.orders.FindByID(ctx, actor.CompanyID, id)
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, id)
+	if err != nil {
+		return nil, err
+	}
+	// Same names as the list, so a detail page and the row it was opened from
+	// do not disagree about where an order is going.
+	single := []models.Order{*order}
+	s.resolveNames(ctx, single)
+	return &single[0], nil
 }
 
 // GetForService resolves an order for a cross-service read.
@@ -226,10 +450,84 @@ func (s *OrderService) GetForService(ctx context.Context, id uuid.UUID) (*models
 // List pages the caller's orders.
 func (s *OrderService) List(ctx context.Context, actor Actor, p query.Params) ([]models.Order, int64, error) {
 	// A driver sees their own assignments, not the company's whole book.
+	var (
+		orders []models.Order
+		total  int64
+		err    error
+	)
 	if actor.Role == models.RoleDriver {
-		return s.orders.ListForDriver(ctx, actor.UserID, p)
+		orders, total, err = s.orders.ListForDriver(ctx, actor.UserID, p)
+	} else {
+		orders, total, err = s.orders.List(ctx, actor.CompanyID, p)
 	}
-	return s.orders.List(ctx, actor.CompanyID, p)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	s.resolveNames(ctx, orders)
+	return orders, total, nil
+}
+
+// resolveNames fills in the display names behind the master data ids an order
+// carries: warehouses and the truck.
+//
+// The ids alone are Mongo ObjectIds owned by another service, so a list
+// rendered from them shows a column of hex. Resolving here costs one lookup per
+// DISTINCT id per page — two orders between the same pair of warehouses cost
+// two lookups, not four.
+//
+// Failure is deliberately not returned. Master data being unreachable should
+// leave the route column blank, not take the order list down with it; the order
+// itself is authoritative and complete without the names.
+func (s *OrderService) resolveNames(ctx context.Context, orders []models.Order) {
+	if s.masterdata == nil || len(orders) == 0 {
+		return
+	}
+
+	warehouses := map[string]string{}
+	trucks := map[string]string{}
+
+	for i := range orders {
+		for _, id := range []*string{orders[i].OriginWarehouseID, orders[i].DestinationWarehouseID} {
+			if id != nil && *id != "" {
+				warehouses[*id] = ""
+			}
+		}
+		if orders[i].TruckID != nil && *orders[i].TruckID != "" {
+			trucks[*orders[i].TruckID] = ""
+		}
+	}
+
+	for id := range warehouses {
+		w, err := s.masterdata.GetWarehouse(ctx, id)
+		if err != nil {
+			slog.WarnContext(ctx, "could not resolve a warehouse name",
+				"warehouse_id", id, "error", err)
+			continue
+		}
+		warehouses[id] = w.GetName()
+	}
+	for id := range trucks {
+		t, err := s.masterdata.GetTruck(ctx, id)
+		if err != nil {
+			slog.WarnContext(ctx, "could not resolve a truck",
+				"truck_id", id, "error", err)
+			continue
+		}
+		trucks[id] = t.GetPoliceNumber()
+	}
+
+	for i := range orders {
+		if id := orders[i].OriginWarehouseID; id != nil {
+			orders[i].OriginWarehouseName = warehouses[*id]
+		}
+		if id := orders[i].DestinationWarehouseID; id != nil {
+			orders[i].DestinationWarehouseName = warehouses[*id]
+		}
+		if id := orders[i].TruckID; id != nil {
+			orders[i].TruckPoliceNumber = trucks[*id]
+		}
+	}
 }
 
 // History returns an order's status timeline.
@@ -438,6 +736,21 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID, d
 	order.StatusCode = models.OrderAssigned
 	order.DriverUserID = &driverID
 	order.TruckID = &truckID
+
+	// Plan the truck's run to the loading point. Only possible now: the
+	// approach starts wherever the assigned truck is, so it does not exist
+	// until there is an assigned truck, and reassigning replaces it.
+	//
+	// Logged rather than returned for the same reason as the haul: the driver
+	// has the job either way, and refusing an assignment because a routing call
+	// failed would leave the order unallocated for no operational gain.
+	if s.dispatch != nil {
+		if err := s.dispatch.PlanApproach(ctx, order); err != nil {
+			slog.WarnContext(ctx, "approach route not planned",
+				"orderId", order.ID, "truckId", truckID, "error", err)
+		}
+	}
+
 	return order, nil
 }
 
@@ -503,6 +816,58 @@ func (s *OrderService) nextOrderNumber(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("ORD-%s-%06d", period, seq), nil
+}
+
+// itemsFrom converts submitted lines into rows.
+//
+// Volume is computed HERE and stored, not derived on read. It comes from the
+// dimensions as they were at order time; recomputing it later from a catalogue
+// item whose dimensions have since been corrected would silently restate a
+// shipped order.
+func itemsFrom(in []OrderItemInput) []models.OrderItem {
+	out := make([]models.OrderItem, 0, len(in))
+	for _, item := range in {
+		row := models.OrderItem{
+			Name:     item.Name,
+			Quantity: item.Quantity,
+			WeightKg: item.WeightKg,
+			LengthCm: item.LengthCm,
+			WidthCm:  item.WidthCm,
+			HeightCm: item.HeightCm,
+		}
+		setIfNotEmpty(&row.CatalogItemID, item.CatalogItemID)
+		setIfNotEmpty(&row.Unit, item.Unit)
+		setIfNotEmpty(&row.Packaging, item.Packaging)
+		setIfNotEmpty(&row.HandlingNotes, item.HandlingNotes)
+
+		// All three dimensions or none. A partial entry leaves volume blank
+		// rather than treating a missing height as zero, which would make a
+		// crate of any size occupy nothing.
+		if item.LengthCm != nil && item.WidthCm != nil && item.HeightCm != nil {
+			// centimetres cubed to cubic metres.
+			volume := item.LengthCm.Mul(*item.WidthCm).Mul(*item.HeightCm).
+				Div(decimal.NewFromInt(1_000_000))
+			row.VolumeM3 = &volume
+		}
+
+		out = append(out, row)
+	}
+	return out
+}
+
+// stringFromDetail reads one string out of an order's free-form detail.
+//
+// Returns empty for a missing key or a non-string value rather than erroring:
+// detail is client-supplied and unvalidated, and a malformed entry should widen
+// the rate lookup, not fail the order.
+func stringFromDetail(detail models.JSONB, key string) string {
+	if detail == nil {
+		return ""
+	}
+	if v, ok := detail[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func setIfNotEmpty(target **string, value string) {

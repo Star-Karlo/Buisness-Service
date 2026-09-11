@@ -28,6 +28,15 @@ authentication service's public key.
 legal and whether this role may do it. `GET /orders/:id/transitions` returns the
 moves available to *this* caller, so a client renders only buttons that work.
 
+The **permission** is checked in the handler rather than on the route, because
+the target status arrives in the request body — one URL covers transitions as
+different as submitting an order and cancelling it, and a route guard is fixed
+when the route is registered. `PermissionForOrderStatus` and
+`PermissionForShipmentStatus` map each target status to the key it needs, and a
+status with no entry is refused, so adding one without deciding who may reach
+it fails closed. The role rules still apply on top; a caller needs both. The
+full mapping is in [`../docs/PERMISSIONS.md`](../docs/PERMISSIONS.md) §5.
+
 Transitions are **compare-and-set**: the update applies only if the order is
 still in the expected state, so two managers pressing approve at once cannot
 both succeed. An integration test asserts exactly one winner out of twenty.
@@ -41,6 +50,47 @@ marking their own invoice paid.
 Amounts are `decimal.Decimal`, never `float64`. PPN is *added* and PPH23 is
 *withheld*; both are computed in one place with the signs pinned by test.
 
+
+## Road routing goes through MAPID, from the server
+
+`POST /api/v1/routing/route` plans a road route between two or more points. It
+replaces the Mapbox call the monolith made from the browser, and the reason it
+is a backend client at all is not negotiable: **the request carries an API key,
+and a key in a public bundle belongs to whoever finds it.**
+
+MAPID wraps GraphHopper, so the request and response shapes are GraphHopper's
+and its documentation is the one that applies. Several details were established
+by probing the live service rather than read from a document:
+
+- The endpoint is the **root path** — `POST https://routing.mapid.io/?key=…`. `/v4/route` 404s, and GET is not supported.
+- Profiles are exactly `car`, `truck`, `motorcycle`, `foot`. **`small_truck` does not exist** despite appearing in GraphHopper's own docs, so the client refuses unknown profiles by name rather than passing them through.
+- `points` are `[longitude, latitude]` — GeoJSON order.
+- Toll segments come back as `"all"` or `"missing"`. **`"missing"` is not `"free"`**; it is the provider having no data, and treating it as free underprices the journey.
+- Avoiding tolls needs `ch.disable: true` plus a custom model, which invalidates the precomputed shortcuts and is measurably slower. On Semarang → Surabaya: 342.5 km / 281 min with tolls, 309.6 km / 301 min avoiding them — shorter and slower, which makes it a commercial decision rather than a better route.
+- MAPID returns intermittent 502s. The client makes **at most two attempts**, because a route request reads a road network and writes nothing, so a retry cannot double anything. A 4xx returns immediately.
+
+`truck` is the default profile. Planning a lorry's journey on the car profile
+produces a route the driver cannot legally take, and the difference is not
+visible on a map.
+
+The route is guarded by `order.read` rather than a routing key of its own: a
+key everybody would have to hold in order to plan a journey is a key that says
+nothing. Configuration is `MAPID_BASE_URL` and `MAPID_KEY`; neither is
+required, and an unset key leaves the endpoint answering *"Routing is not
+configured on this deployment"* rather than the service refusing to start.
+
+## Orders carry resolved names, at one lookup per distinct id
+
+Order payloads include `originWarehouseName`, `destinationWarehouseName` and
+`truckPoliceNumber`, resolved from master data over gRPC on both the list and
+the detail path — the same order must not read differently in a table and on
+its own page.
+
+Resolution is deduplicated per page: one lookup per **distinct** id, so two
+orders running between the same pair of warehouses cost two lookups rather than
+four. A failure to resolve is logged and leaves the field blank rather than
+failing the read; a name is a convenience, and losing the whole page of orders
+because master data is briefly unreachable is the worse outcome.
 
 ## Company settings are cached, orders are not
 
@@ -112,11 +162,20 @@ forgotten copy.
 | `make tools` | install buf, the protoc plugins, swag and golangci-lint |
 | `make run` | run the service |
 | `make test` | unit tests |
-| `make test-integration` | integration tests (needs a database; see above) |
+| `make test-integration` | integration tests (needs `karlo_business_test`; see below) |
 | `make lint` | golangci-lint |
 | `make proto` | regenerate the gRPC bindings |
 | `make swagger` | regenerate the OpenAPI document |
 | `make docker` | build the container image |
+
+## The integration suite refuses a database that is not a test database
+
+`BUSINESS_TEST_DSN` must name a database containing `_test`, or `testDB` fails
+the run before opening a connection. The suite `TRUNCATE`s orders and
+agreements, and pointing it at the local development database wiped the seed
+once. It is a hard failure rather than a skip, because a skip is how you end up
+believing a destructive suite ran. The DSN is redacted before it reaches the
+message. `make test-integration-up` creates `karlo_business_test`.
 
 ## API documentation
 

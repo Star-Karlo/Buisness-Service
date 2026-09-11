@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,9 +21,13 @@ import (
 	businessv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/business/v1"
 	"github.com/karlo/business-service/internal/platform/grpcutil"
 	"github.com/karlo/business-service/internal/platform/logger"
+	"github.com/karlo/business-service/internal/platform/revocation"
 	"github.com/karlo/business-service/internal/repository"
 	"github.com/karlo/business-service/internal/routes"
+	"github.com/karlo/business-service/internal/routing"
+	"github.com/karlo/business-service/internal/storage"
 	"github.com/karlo/business-service/internal/services"
+	"github.com/karlo/business-service/internal/telemetry"
 )
 
 // @title           Karlo Business API
@@ -105,10 +110,84 @@ func run() error {
 	shipmentRepo := repository.NewShipmentRepository(db)
 	agreementRepo := repository.NewAgreementRepository(db)
 	invoiceRepo := repository.NewInvoiceRepository(db)
+	fieldConfigRepo := repository.NewFieldConfigRepository(db)
+	orderItemRepo := repository.NewOrderItemRepository(db)
+	routeCacheRepo := repository.NewRouteCacheRepository(db)
+	orderRouteRepo := repository.NewOrderRouteRepository(db)
+	allowanceRepo := repository.NewAllowanceRepository(db)
+	handoverRepo := repository.NewHandoverRepository(db)
+
+	// Publish the configurable-field catalogue the code declares.
+	//
+	// Startup rather than migration, and it is the half of the contract that
+	// makes the table trustworthy: the configurator reads field_definitions, so
+	// a field declared only in code would be invisible there, and a row that
+	// exists only in the table would be a toggle that saves happily and changes
+	// nothing.
+	//
+	// A sync failure is fatal. Serving on a stale catalogue means administrators
+	// configure fields that no longer exist and cannot configure ones that do,
+	// which is worse than not starting.
+	syncCtx, cancelSync := context.WithTimeout(context.Background(), 30*time.Second)
+	err = fieldConfigRepo.SyncCatalog(syncCtx)
+	cancelSync()
+	if err != nil {
+		return fmt.Errorf("sync field catalogue: %w", err)
+	}
+
+	// MAPID, wrapped in the database-backed cache. Everything that routes goes
+	// through the cache rather than the bare client: the same warehouse pair is
+	// planned for every order on a lane, and each miss is a billable call.
+	routingClient := routing.New(cfg.MapIDBaseURL, cfg.MapIDKey)
+
+	// Object storage. A missing bucket is not fatal — the client reports
+	// itself unconfigured and the upload endpoints answer 501, which is what
+	// the frontend reads to disable its file fields with a reason.
+	storageClient, err := storage.New(context.Background(), storage.Config{
+		Bucket:    cfg.StorageBucket,
+		Region:    cfg.StorageRegion,
+		Endpoint:  cfg.StorageEndpoint,
+		AccessKey: cfg.StorageAccessKey,
+		SecretKey: cfg.StorageSecretKey,
+	})
+	if err != nil {
+		slog.Error("fatal", "error", err)
+		os.Exit(1)
+	}
+	if !storageClient.Configured() {
+		slog.Warn("uploads disabled: STORAGE_BUCKET is not set")
+	}
+	routeCache := routing.NewCache(routingClient, routeCacheRepo)
+
+	// Live vehicle positions. Optional: with no base URL configured, dispatch
+	// falls back to each truck's last unloading point, which is where this
+	// service got its positions before telemetry existed.
+	telemetryClient := telemetry.New(cfg.TelemetryBaseURL, cfg.TelemetryKey)
+	if !telemetryClient.Configured() {
+		slog.Warn("telemetry not configured; dispatch will rank trucks on their last unloading point")
+	}
 
 	orderService := services.NewOrderService(orderRepo, shipmentRepo, agreementRepo, authClient, masterDataClient, notifier)
 	shipmentService := services.NewShipmentService(shipmentRepo, orderRepo, authClient, masterDataClient, notifier)
 	billingService := services.NewBillingService(agreementRepo, invoiceRepo, orderRepo, authClient, notifier)
+	fieldConfigService := services.NewFieldConfigService(fieldConfigRepo)
+	dispatchService := services.NewDispatchService(orderRepo, orderRouteRepo, routeCache, masterDataClient, telemetryClient)
+	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo)
+	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
+
+	// The order service plans the haul route when an order is created. Injected
+	// after construction rather than as a constructor argument because dispatch
+	// needs the order repository, which the order service also owns — passing
+	// each into the other's constructor is a cycle.
+	orderService.WithDispatch(dispatchService)
+
+	// The per-company field check. Attached to both create paths, so the
+	// configuration a company sets shapes what the SERVER demands and not only
+	// what the browser draws — the API is reachable by anyone with a token.
+	orderService.WithFieldConfig(fieldConfigService, orderItemRepo)
+	billingService.WithFieldConfig(fieldConfigService)
+	// So an agreement's warehouse-level lanes can be measured on creation.
+	billingService.WithDispatch(dispatchService)
 
 	grpcSrv := grpcutil.NewServer(grpcutil.ServerConfig{
 		Service:               "business",
@@ -122,13 +201,27 @@ func run() error {
 		grpcserver.New(orderService, shipmentService, billingService, orderRepo),
 	)
 
+	// Revocations announced by the authentication service. Honoured locally,
+	// so a suspension or a permission change takes effect at once without
+	// putting authentication on the critical path of every request.
+	watchCtx, stopWatching := context.WithCancel(context.Background())
+	defer stopWatching()
+	revocationChecker, _ := revocation.FromEnv(watchCtx, "business", tokenLifetimeHint())
+
 	router := routes.Setup(routes.Deps{
-		Config:   cfg,
-		Verifier: verifier,
-		Remote:   authClient,
-		Order:    handlers.NewOrderHandler(orderService),
-		Shipment: handlers.NewShipmentHandler(shipmentService),
-		Billing:  handlers.NewBillingHandler(billingService),
+		Config:      cfg,
+		Verifier:    verifier,
+		Remote:      authClient,
+		Revocations: revocationChecker,
+		Routing:     handlers.NewRoutingHandler(routingClient),
+		Upload:      handlers.NewUploadHandler(storageClient),
+		Order:       handlers.NewOrderHandler(orderService),
+		Shipment:    handlers.NewShipmentHandler(shipmentService),
+		Billing:     handlers.NewBillingHandler(billingService),
+		Dispatch:    handlers.NewDispatchHandler(dispatchService),
+		FieldConfig: handlers.NewFieldConfigHandler(fieldConfigService),
+		Allowance:   handlers.NewAllowanceHandler(allowanceService),
+		Handover:    handlers.NewHandoverHandler(handoverService),
 	})
 
 	httpSrv := &http.Server{
@@ -158,6 +251,9 @@ func run() error {
 	stopSweep := startAgreementExpirySweep(billingService)
 	defer stopSweep()
 
+	stopEviction := startRouteCacheEviction(routeCacheRepo)
+	defer stopEviction()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -184,6 +280,43 @@ func run() error {
 
 	slog.Info("stopped")
 	return nil
+}
+
+// startRouteCacheEviction deletes route cache entries past their expiry.
+//
+// Separate from the agreement sweep despite sharing an interval, because they
+// fail independently: a cache table that will not delete should not stop
+// agreements expiring, and an agreement sweep that errors should not leave the
+// cache growing. Sharing a goroutine would couple the two.
+//
+// Nothing depends on this running. An expired entry is already ignored by
+// Lookup, so the only cost of eviction failing is disk.
+func startRouteCacheEviction(cache *repository.RouteCacheRepository) func() {
+	ticker := time.NewTicker(time.Hour)
+	done := make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				n, err := cache.EvictExpired(ctx)
+				cancel()
+				if err != nil {
+					slog.Error("route cache eviction failed", "error", err)
+					continue
+				}
+				if n > 0 {
+					slog.Info("evicted expired routes", "count", n)
+				}
+			case <-done:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+
+	return func() { close(done) }
 }
 
 // startAgreementExpirySweep marks contracts past their validity as expired.
@@ -224,3 +357,12 @@ func closeQuietly(name string, closer func() error) {
 		slog.Error("close failed", "component", name, "error", err)
 	}
 }
+
+// tokenLifetimeHint is how long a revocation entry must be kept: at least as
+// long as the longest token that could still be in circulation.
+//
+// This service does not mint tokens and so cannot read the real setting. Two
+// hours matches the authentication service's default; erring long is the safe
+// direction, since an entry kept too long merely refuses a token that had
+// already expired.
+func tokenLifetimeHint() time.Duration { return 2 * time.Hour }

@@ -29,9 +29,19 @@ type Deps struct {
 	Verifier *authctx.Verifier
 	Remote   authctx.RemoteValidator
 
+	// Revocations lets a locally-verified token be refused before it expires.
+	Revocations authctx.RevocationChecker
+
 	Order    *handlers.OrderHandler
 	Shipment *handlers.ShipmentHandler
 	Billing  *handlers.BillingHandler
+	Routing  *handlers.RoutingHandler
+
+	Dispatch    *handlers.DispatchHandler
+	FieldConfig *handlers.FieldConfigHandler
+	Upload      *handlers.UploadHandler
+	Allowance   *handlers.AllowanceHandler
+	Handover    *handlers.HandoverHandler
 }
 
 func Setup(d Deps) *gin.Engine {
@@ -64,7 +74,13 @@ func Setup(d Deps) *gin.Engine {
 	}
 
 	api := router.Group("/api/v1")
-	api.Use(authctx.RequireAuth(d.Verifier, d.Remote))
+	api.Use(authctx.RequireAuthWithRevocations(d.Verifier, d.Remote, d.Revocations))
+
+	// Routing. Guarded by order.read rather than a routing key of its own:
+	// planning a journey is something anyone who can see an order does, and a
+	// separate permission would have to be granted to everybody, which is a
+	// permission that means nothing.
+	api.POST("/routing/route", authctx.RequireModule("order.read"), d.Routing.Plan)
 
 	// Orders.
 	orders := api.Group("/orders")
@@ -79,6 +95,35 @@ func Setup(d Deps) *gin.Engine {
 	orders.PUT("/:id/assign", authctx.RequireModule("order.assignDriver"), d.Order.AssignDriver)
 	orders.GET("/:id/shipment", authctx.RequireModule("order.read"), d.Shipment.GetByOrder)
 
+	// File uploads. Deliberately NOT gated on a domain module: every screen
+	// that attaches a file needs this, and a truck photo and an agreement PDF
+	// would otherwise each need their own permission for the same act. The
+	// company scoping in the handler is what protects it.
+	uploads := api.Group("/uploads")
+	uploads.POST("/presign", d.Upload.Presign)
+	uploads.POST("/download-url", d.Upload.DownloadURL)
+
+	// Dispatch. The planner's screen: which trucks could take this, and what
+	// roads they would drive.
+	orders.GET("/:id/candidates", authctx.RequireModule("dispatch.read"), d.Dispatch.Candidates)
+	orders.GET("/:id/routes", authctx.RequireModule("dispatch.read"), d.Dispatch.Routes)
+
+	// Re-planning is the paid feature. The permission gate here is only half
+	// the check: dispatch.reroute names routing.advanced as its feature, so a
+	// company without the entitlement fails at RequireModule, and the handler
+	// checks the entitlement again before spending a routing call. Two checks
+	// because this endpoint costs money on every press.
+	orders.POST("/:id/reroute", authctx.RequireModule("dispatch.reroute"), d.Dispatch.Reroute)
+
+	// Uang sangu. Separate permissions from the order itself, because a
+	// company decides independently who may see the figure, who may set it,
+	// and who may commit it to the driver — for some that is sales, for others
+	// finance.
+	orders.GET("/:id/allowance", authctx.RequireModule("order.allowance.read"), d.Allowance.Get)
+	orders.PUT("/:id/allowance", authctx.RequireModule("order.allowance.write"), d.Allowance.Save)
+	orders.POST("/:id/allowance/finalise", authctx.RequireModule("order.allowance.finalise"), d.Allowance.Finalise)
+	orders.GET("/:id/allowance/history", authctx.RequireModule("order.allowance.read"), d.Allowance.History)
+
 	// Shipments. No module permission on the status route: the shipment state
 	// machine already restricts each step to one role, and drivers are
 	// sub-accounts whose permission maps would otherwise have to enumerate
@@ -89,13 +134,38 @@ func Setup(d Deps) *gin.Engine {
 	shipments.POST("/:id/documents", d.Shipment.AttachDocument)
 	shipments.GET("/:id/documents", d.Shipment.Documents)
 
+	// The unloading handover. No module permission, for the same reason as the
+	// status route above: the driver is the only caller, the service checks
+	// that they are the one assigned, and requiring a permission would mean
+	// every driver sub-account enumerated it.
+	shipments.POST("/:id/handover", d.Handover.Issue)
+	shipments.POST("/:id/handover/verify", d.Handover.Verify)
+
 	// Agreements.
 	agreements := api.Group("/agreements")
 	agreements.GET("", authctx.RequireModule("agreement.read"), d.Billing.ListAgreements)
 	agreements.POST("", authctx.RequireModule("agreement.create"), d.Billing.CreateAgreement)
+	// The approval queue, before /:id so "pending-approval" is not parsed as
+	// an agreement id.
+	agreements.GET("/pending-approval", authctx.RequireModule("agreement.approveRevision"), d.Billing.PendingApprovals)
+
 	agreements.GET("/:id", authctx.RequireModule("agreement.read"), d.Billing.GetAgreement)
+
+	// Versioning and approval. An agreement is a priced contract, so an
+	// amendment is a new version rather than an edit in place — otherwise a
+	// price change silently restates work already done.
+	agreements.POST("/:id/revisions", authctx.RequireModule("agreement.revise"), d.Billing.Revise)
+	agreements.PUT("/:id/revisions/decision", authctx.RequireModule("agreement.approveRevision"), d.Billing.DecideRevision)
+	agreements.GET("/:id/versions", authctx.RequireModule("agreement.read"), d.Billing.Lineage)
+	agreements.GET("/:id/price-history", authctx.RequireModule("agreement.priceHistory"), d.Billing.PriceHistory)
 	agreements.PUT("/:id/decision", authctx.RequireModule("agreement.approve"), d.Billing.DecideAgreement)
 	agreements.PUT("/:id/verify", authctx.RequireModule("agreement.approve"), d.Billing.VerifyAgreement)
+
+	// Form configuration. What an agreement or an order form demands of this
+	// company — the one thing about the flow that varies between them.
+	config := api.Group("/config")
+	config.GET("/fields/:entity", authctx.RequireModule("config.fields.read"), d.FieldConfig.Get)
+	config.PUT("/fields/:entity", authctx.RequireModule("config.fields.write"), d.FieldConfig.Update)
 
 	// Invoices.
 	invoices := api.Group("/invoices")

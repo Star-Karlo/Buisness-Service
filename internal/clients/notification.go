@@ -152,3 +152,17 @@ func ToTruckGroup(truckGroupID string) *notificationv1.Audience {
 type NoopNotifier struct{}
 
 func (NoopNotifier) Notify(context.Context, Event) {}
+
+// ToPhone addresses a raw number rather than a Karlo account.
+//
+// Needed for exactly one thing: the handover code at the unloading point. The
+// receiving PIC is a warehouse employee of the customer, not a user of this
+// system, so there is no account to notify — and requiring one would mean every
+// delivery address had to be onboarded before a driver could hand over goods.
+func ToPhone(number string) *notificationv1.Audience {
+	return &notificationv1.Audience{
+		Target: &notificationv1.Audience_Phone{
+			Phone: &notificationv1.PhoneNumber{Number: number},
+		},
+	}
+}

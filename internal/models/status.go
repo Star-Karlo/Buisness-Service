@@ -45,13 +45,40 @@ const (
 )
 
 // Agreement statuses.
+//
+// pendingApproval and superseded were added with versioning. They are states of
+// a VERSION, not of a contract: at any moment one version of a lineage is
+// active and the rest are superseded, rejected or waiting on a decision.
 const (
 	AgreementDraft     = "draft"
 	AgreementSubmitted = "submitted"
-	AgreementActive    = "active"
-	AgreementRejected  = "rejected"
+
+	// AgreementPendingApproval is a version waiting on a Sales Manager. The
+	// version it supersedes stays active meanwhile — an amendment under
+	// discussion must not stop work being ordered at the agreed price.
+	AgreementPendingApproval = "pendingApproval"
+
+	AgreementActive   = "active"
+	AgreementRejected = "rejected"
+
+	// AgreementSuperseded is a version a later one replaced. Distinct from
+	// expired, which is a term that ran out: a superseded version may still be
+	// within its dates, and orders priced against it stay valid.
+	AgreementSuperseded = "superseded"
+
 	AgreementExpired   = "expired"
 	AgreementCancelled = "cancelled"
+)
+
+// Revision kinds, from the PRD.
+const (
+	// RevisionRenewal extends a contract whose term has ended. A new version
+	// with new dates, referring back.
+	RevisionRenewal = "renewal"
+
+	// RevisionUpdate changes price or terms mid-term. The one that needs a
+	// Sales Manager's approval, because it alters a bargain already struck.
+	RevisionUpdate = "update"
 )
 
 // Invoice statuses.
@@ -358,4 +385,79 @@ func KnownStatuses(domain Domain) []string {
 		out = append(out, code)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Which permission a status change needs
+// ---------------------------------------------------------------------------
+
+// The transition endpoints take their target status from the request body, so
+// the permission they require is not fixed per route and a route-level guard
+// cannot express it: cancelling an order and submitting one arrive at the same
+// URL. These maps supply the missing half, and the handlers consult them.
+//
+// Without them the status endpoints were authenticated but not authorised by
+// permission at all. Only the company-side and role rules in
+// assertTransitionAuthority applied, and those say nothing about permission
+// keys — so a member granted order.read and order.create, and deliberately not
+// order.cancel, could still cancel any of their company's orders. order.cancel
+// and order.approve existed in the catalogue and were checked nowhere.
+//
+// A target status missing from a map is refused rather than allowed. Adding a
+// status without deciding who may reach it should fail closed.
+
+// orderStatusPermission maps an order's target status to the permission needed
+// to move it there.
+var orderStatusPermission = map[string]string{
+	OrderDraft:           "order.update",
+	OrderSubmitted:       "order.create",
+	OrderApproved:        "order.approve",
+	OrderRejected:        "order.approve",
+	OrderReadyToPlan:     "order.readyToPlan",
+	OrderAssigned:        "order.assignDriver",
+	OrderCancelRequested: "order.cancel",
+	OrderCancelled:       "order.cancel",
+
+	// The carrying statuses are reached by the people physically doing the
+	// work, which is what shipment.update grants.
+	OrderInTransit: "shipment.update",
+	OrderDelivered: "shipment.update",
+	OrderCompleted: "shipment.update",
+}
+
+// shipmentStatusPermission maps a shipment's target status to the permission
+// needed to move it there.
+//
+// The two approval steps are separated from ordinary progress deliberately.
+// Advancing a shipment is the driver's job; approving what was loaded or
+// unloaded is the warehouse's, and it is the step that makes the count binding.
+var shipmentStatusPermission = map[string]string{
+	ShipmentAssigned:    "shipment.update",
+	ShipmentToLoading:   "shipment.update",
+	ShipmentAtLoading:   "shipment.update",
+	ShipmentLoading:     "shipment.update",
+	ShipmentLoaded:      "shipment.update",
+	ShipmentToUnloading: "shipment.update",
+	ShipmentAtUnloading: "shipment.update",
+	ShipmentUnloading:   "shipment.update",
+	ShipmentUnloaded:    "shipment.update",
+	ShipmentFinished:    "shipment.update",
+	ShipmentCancelled:   "order.cancel",
+
+	ShipmentLoadingApproved:   "shipment.verifyLoading",
+	ShipmentUnloadingApproved: "shipment.verifyUnloading",
+}
+
+// PermissionForOrderStatus returns the permission needed to move an order to a
+// status, and whether that status is one anybody may move an order to.
+func PermissionForOrderStatus(to string) (string, bool) {
+	key, ok := orderStatusPermission[to]
+	return key, ok
+}
+
+// PermissionForShipmentStatus returns the permission needed to move a shipment
+// to a status, and whether that status is one anybody may move a shipment to.
+func PermissionForShipmentStatus(to string) (string, bool) {
+	key, ok := shipmentStatusPermission[to]
+	return key, ok
 }

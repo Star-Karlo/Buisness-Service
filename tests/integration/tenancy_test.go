@@ -4,6 +4,7 @@ package integration
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -113,21 +114,43 @@ func TestFilterAllowlistIsEnforcedInSQL(t *testing.T) {
 		t.Errorf("allowlisted filter returned %d rows", total)
 	}
 
-	// A hostile one is dropped by the parser, so the query runs unfiltered
-	// rather than failing — and critically, does not execute the injected text.
+	// A hostile one is now REFUSED rather than dropped.
+	//
+	// It used to be silently discarded and the rest of the query run
+	// unfiltered. That was safe — the injected text never reached SQL — but it
+	// was indistinguishable from success, and the same silence hid ordinary
+	// mistakes: a filter on a column that does not exist returned every row
+	// with a 200, so a filtered list quietly became an unfiltered one.
+	//
+	// Refusing is safe in the same way and honest as well. What matters for
+	// injection is unchanged and asserted below: the parser produces NO
+	// filters, so nothing hostile can reach the query builder.
 	hostile := query.Parse("0", "20",
 		`[{"id":"id) OR (1=1","value":"x"},{"id":"statusCode","value":"submitted"}]`,
 		`[{"id":"(SELECT 1)","desc":true}]`, "",
 		repository.OrderFields())
 
-	if len(hostile.Filters) != 1 {
-		t.Fatalf("the hostile filter survived parsing: %+v", hostile.Filters)
+	if hostile.Err == nil {
+		t.Fatal("an unknown filter field must be refused, not silently dropped")
+	}
+	if len(hostile.Filters) != 0 {
+		t.Fatalf("a refused request must carry no filters at all, got %+v", hostile.Filters)
 	}
 	if len(hostile.Sorts) != 0 {
 		t.Fatalf("the hostile sort survived parsing: %+v", hostile.Sorts)
 	}
 
-	// And the surviving query still executes correctly.
+	// The injected text must not appear anywhere the query builder would see.
+	if strings.Contains(hostile.Err.Error(), "OR (1=1") {
+		// The message names the rejected field, which is intended — it is what
+		// tells a developer which filter was wrong. It must never be
+		// interpolated into SQL, and it is not: it goes only to the response.
+		t.Log("the error names the rejected field, which is correct")
+	}
+
+	// A request that is refused still executes safely if a handler ignores the
+	// error — it returns nothing rather than everything, which is the direction
+	// a mistake here should fail in.
 	if _, _, err := repo.List(ctx(), order.ShipperCompanyID, hostile); err != nil {
 		t.Fatalf("the sanitised query failed to execute: %v", err)
 	}

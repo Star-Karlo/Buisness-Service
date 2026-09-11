@@ -21,24 +21,71 @@ func NewBillingHandler(billing *services.BillingService) *BillingHandler {
 	return &BillingHandler{billing: billing}
 }
 
+type customerRequest struct {
+	CompanyID string `json:"companyId" binding:"required"`
+	Label     string `json:"label"`
+}
+
 type rateRequest struct {
-	OriginCityID      string           `json:"originCityId"`
-	DestinationCityID string           `json:"destinationCityId"`
-	TruckTypeID       string           `json:"truckTypeId"`
-	PricingTypeID     string           `json:"pricingTypeId"`
-	Price             decimal.Decimal  `json:"price"`
-	MinQuantity       *decimal.Decimal `json:"minQuantity"`
-	LeadTimeHours     *int             `json:"leadTimeHours"`
+	// CustomerCompanyID narrows this lane to one client. Omitted, the lane
+	// prices for every customer the agreement covers.
+	CustomerCompanyID string `json:"customerCompanyId"`
+
+	// Warehouse ids make this a warehouse-level lane, which is the only kind
+	// that can be routed — a city pair has no coordinates to measure between.
+	OriginWarehouseID      string `json:"originWarehouseId"`
+	DestinationWarehouseID string `json:"destinationWarehouseId"`
+
+	OriginCityID      string `json:"originCityId"`
+	DestinationCityID string `json:"destinationCityId"`
+
+	// Kecamatan, sent only by companies that price lanes below city level.
+	// A company whose form configuration hides these must not send them: the
+	// service refuses a hidden field carrying a value rather than dropping it.
+	OriginDistrictID      string `json:"originDistrictId"`
+	DestinationDistrictID string `json:"destinationDistrictId"`
+
+	TruckTypeID   string           `json:"truckTypeId"`
+	PricingTypeID string           `json:"pricingTypeId"`
+	Price         decimal.Decimal  `json:"price"`
+	MinQuantity   *decimal.Decimal `json:"minQuantity"`
+	LeadTimeHours *int             `json:"leadTimeHours"`
+}
+
+// foldRateKeys lifts per-rate fields to the catalogue paths the form declares.
+//
+// Mutates `present` rather than returning a second map, so there is one answer
+// to "what did the caller supply" rather than two that can disagree.
+func foldRateKeys(present map[string]bool, rates []rateRequest) {
+	mark := func(key string, supplied bool) {
+		if supplied {
+			present[key] = true
+		}
+	}
+	for _, r := range rates {
+		mark("route.originCityId", r.OriginCityID != "")
+		mark("route.destinationCityId", r.DestinationCityID != "")
+		mark("route.originDistrictId", r.OriginDistrictID != "")
+		mark("route.destinationDistrictId", r.DestinationDistrictID != "")
+		mark("truckTypeId", r.TruckTypeID != "")
+		mark("pricingTypeId", r.PricingTypeID != "")
+		// Price is the one field where zero is a real value — a free leg on a
+		// backhaul — so presence is the rate row existing, not the number
+		// being non-zero.
+		mark("price", true)
+		mark("minQuantity", r.MinQuantity != nil)
+	}
 }
 
 type createAgreementRequest struct {
-	TransporterCompanyID string         `json:"transporterCompanyId" binding:"required"`
-	ValidFrom            time.Time      `json:"validFrom" binding:"required"`
-	ValidUntil           time.Time      `json:"validUntil" binding:"required"`
-	PaymentTypeID        string         `json:"paymentTypeId"`
-	CurrencyID           string         `json:"currencyId"`
-	Detail               map[string]any `json:"detail"`
-	Rates                []rateRequest  `json:"rates" binding:"required,min=1"`
+	TransporterCompanyID string            `json:"transporterCompanyId" binding:"required"`
+	ValidFrom            time.Time         `json:"validFrom" binding:"required"`
+	ValidUntil           time.Time         `json:"validUntil" binding:"required"`
+	PaymentTypeID        string            `json:"paymentTypeId"`
+	CurrencyID           string            `json:"currencyId"`
+	Detail               map[string]any    `json:"detail"`
+	Rates                []rateRequest     `json:"rates" binding:"required,min=1"`
+	Customers            []customerRequest `json:"customers"`
 }
 
 // CreateAgreement records a contract.
@@ -54,6 +101,9 @@ func (h *BillingHandler) CreateAgreement(c *gin.Context) {
 		return
 	}
 
+	// See OrderHandler.Create for why the raw keys are read before binding.
+	present := presentKeys(buffered(c.Request))
+
 	var req createAgreementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
@@ -66,7 +116,15 @@ func (h *BillingHandler) CreateAgreement(c *gin.Context) {
 		return
 	}
 
+	// The field catalogue describes the FORM, whose route and pricing inputs
+	// live on rate rows; the payload nests them in an array. A generic walk of
+	// the body cannot bridge that, so the rate-level keys are folded up here:
+	// a field counts as supplied when any rate supplies it, which is the same
+	// question the form is asking — "is this input in use".
+	foldRateKeys(present, req.Rates)
+
 	in := services.CreateAgreementInput{
+		Present:              present,
 		TransporterCompanyID: transporterID,
 		ValidFrom:            req.ValidFrom,
 		ValidUntil:           req.ValidUntil,
@@ -74,16 +132,42 @@ func (h *BillingHandler) CreateAgreement(c *gin.Context) {
 		CurrencyID:           req.CurrencyID,
 		Detail:               req.Detail,
 	}
-	for _, r := range req.Rates {
-		in.Rates = append(in.Rates, services.RateInput{
-			OriginCityID:      r.OriginCityID,
-			DestinationCityID: r.DestinationCityID,
-			TruckTypeID:       r.TruckTypeID,
-			PricingTypeID:     r.PricingTypeID,
-			Price:             r.Price,
-			MinQuantity:       r.MinQuantity,
-			LeadTimeHours:     r.LeadTimeHours,
+	// The clients this agreement covers. `c` is the gin context here, so the
+	// loop variable is named for what it holds rather than shadowing it.
+	for _, customer := range req.Customers {
+		id, cerr := uuid.Parse(customer.CompanyID)
+		if cerr != nil {
+			response.BadRequest(c, "Invalid customer companyId: "+customer.CompanyID)
+			return
+		}
+		in.Customers = append(in.Customers, services.CustomerInput{
+			CompanyID: id, Label: customer.Label,
 		})
+	}
+
+	for _, r := range req.Rates {
+		rate := services.RateInput{
+			OriginWarehouseID:      r.OriginWarehouseID,
+			DestinationWarehouseID: r.DestinationWarehouseID,
+			OriginCityID:           r.OriginCityID,
+			DestinationCityID:      r.DestinationCityID,
+			OriginDistrictID:       r.OriginDistrictID,
+			DestinationDistrictID:  r.DestinationDistrictID,
+			TruckTypeID:            r.TruckTypeID,
+			PricingTypeID:          r.PricingTypeID,
+			Price:                  r.Price,
+			MinQuantity:            r.MinQuantity,
+			LeadTimeHours:          r.LeadTimeHours,
+		}
+		if r.CustomerCompanyID != "" {
+			id, cerr := uuid.Parse(r.CustomerCompanyID)
+			if cerr != nil {
+				response.BadRequest(c, "Invalid lane customerCompanyId: "+r.CustomerCompanyID)
+				return
+			}
+			rate.CustomerCompanyID = &id
+		}
+		in.Rates = append(in.Rates, rate)
 	}
 
 	agreement, err := h.billing.CreateAgreement(c.Request.Context(), actor, in)
@@ -109,6 +193,9 @@ func (h *BillingHandler) ListAgreements(c *gin.Context) {
 	}
 
 	params := parseQuery(c, repository.AgreementFields())
+	if badQuery(c, params) {
+		return
+	}
 
 	items, total, err := h.billing.ListAgreements(c.Request.Context(), actor, params)
 	if err != nil {
@@ -280,6 +367,9 @@ func (h *BillingHandler) ListInvoices(c *gin.Context) {
 	}
 
 	params := parseQuery(c, repository.InvoiceFields())
+	if badQuery(c, params) {
+		return
+	}
 
 	items, total, err := h.billing.ListInvoices(c.Request.Context(), actor, params)
 	if err != nil {
