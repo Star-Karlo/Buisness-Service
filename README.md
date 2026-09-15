@@ -111,12 +111,16 @@ full list of what is deliberately left out and why.
 ## Layout
 
 ```
-cmd/server/           entrypoint
+cmd/server/           entrypoint: serve | migrate | archive [--dry-run] | restore <entity> <id>
 internal/
+  archive/            cold storage: what leaves for Glacier, when, and how it comes back
   config/             environment loading; no defaults for security controls
   models/             domain types
   repository/         the only code that talks to the database
-  services/           business rules
+  services/           business rules, incl. the geofence watcher that polls FMS positions
+  storage/            S3: presigned uploads, and the Deep Archive put/get the archiver uses
+  telemetry/          FMS tracking client (positions by IMEI)
+  routing/            MAPID client behind the Postgres route cache
   handlers/           HTTP
   grpcserver/         gRPC contract implementation
   clients/            outbound gRPC to other services
@@ -167,6 +171,7 @@ forgotten copy.
 | `make proto` | regenerate the gRPC bindings |
 | `make swagger` | regenerate the OpenAPI document |
 | `make docker` | build the container image |
+| `go run ./cmd/server archive --dry-run` | list what the nightly archiver would move to Glacier; `archive` without the flag does it, `restore order <uuid>` brings one back — see `../docs/business/COLD_STORAGE.md` |
 
 ## The integration suite refuses a database that is not a test database
 
