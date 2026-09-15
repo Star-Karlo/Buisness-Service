@@ -79,7 +79,7 @@ func runArchive(cfg *config.Config, db *gorm.DB, args []string) error {
 	sum, err := a.Run(ctx)
 	slog.Info("archive run finished",
 		"invoices", sum.Invoices, "orders", sum.Orders, "agreements", sum.Agreements,
-		"bytes", sum.Bytes, "failed", sum.Failed, "dryRun", slices.Contains(args, "--dry-run"))
+		"files", sum.Files, "bytes", sum.Bytes, "failed", sum.Failed, "dryRun", slices.Contains(args, "--dry-run"))
 	if err != nil {
 		return err
 	}
