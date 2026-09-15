@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"slices"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -45,10 +46,14 @@ func runArchive(cfg *config.Config, db *gorm.DB, args []string) error {
 	}
 
 	a := archive.New(db, store, archive.Options{
-		RetainFor: cfg.ArchiveRetainFor,
-		Batch:     cfg.ArchiveBatch,
-		DryRun:    slices.Contains(args, "--dry-run"),
-		Prefix:    cfg.ArchivePrefix,
+		Retain: map[string]time.Duration{
+			archive.EntityOrder:     cfg.ArchiveRetainOrders,
+			archive.EntityAgreement: cfg.ArchiveRetainAgreements,
+			archive.EntityInvoice:   cfg.ArchiveRetainInvoices,
+		},
+		Batch:  cfg.ArchiveBatch,
+		DryRun: slices.Contains(args, "--dry-run"),
+		Prefix: cfg.ArchivePrefix,
 	})
 
 	if i := slices.Index(args, "restore"); i >= 0 {

@@ -55,12 +55,17 @@ type Config struct {
 	// warehouse notices and one request per tick regardless of fleet size.
 	GeofencePollInterval time.Duration
 
-	// Cold storage. Aggregates untouched for ArchiveRetainFor move to S3
-	// Glacier Deep Archive under ArchivePrefix, ArchiveBatch per entity per
-	// run. See internal/archive.
-	ArchiveRetainFor time.Duration
-	ArchiveBatch     int
-	ArchivePrefix    string
+	// Cold storage. Aggregates untouched for their entity's retention move
+	// to S3 Glacier Deep Archive as Parquet under ArchivePrefix, ArchiveBatch
+	// per entity per run. Retention differs by entity: an order is rarely
+	// opened a year after delivery; an agreement is a contract that may be
+	// argued about for longer; an invoice sits under tax retention rules.
+	// See internal/archive.
+	ArchiveRetainOrders     time.Duration
+	ArchiveRetainAgreements time.Duration
+	ArchiveRetainInvoices   time.Duration
+	ArchiveBatch            int
+	ArchivePrefix           string
 
 	CORSAllowedOrigins []string
 
@@ -138,12 +143,14 @@ func Load() (*Config, error) {
 		// Telemetry. Optional by design: an empty base URL leaves dispatch
 		// ranking trucks by their last unloading point, which is correct for a
 		// parked truck and the behaviour this service had before.
-		TelemetryBaseURL:     envOr("TELEMETRY_BASE_URL", "https://fms-tracking.karlo.id"),
-		TelemetryKey:         envOr("TELEMETRY_INGEST_KEY", ""),
-		GeofencePollInterval: durationOr("GEOFENCE_POLL_INTERVAL", time.Minute),
-		ArchiveRetainFor:     durationOr("ARCHIVE_RETAIN_FOR", 730*24*time.Hour),
-		ArchiveBatch:         intOr("ARCHIVE_BATCH", 500),
-		ArchivePrefix:        envOr("ARCHIVE_PREFIX", "archive"),
+		TelemetryBaseURL:        envOr("TELEMETRY_BASE_URL", "https://fms-tracking.karlo.id"),
+		TelemetryKey:            envOr("TELEMETRY_INGEST_KEY", ""),
+		GeofencePollInterval:    durationOr("GEOFENCE_POLL_INTERVAL", time.Minute),
+		ArchiveRetainOrders:     durationOr("ARCHIVE_RETAIN_ORDERS", 365*24*time.Hour),
+		ArchiveRetainAgreements: durationOr("ARCHIVE_RETAIN_AGREEMENTS", 730*24*time.Hour),
+		ArchiveRetainInvoices:   durationOr("ARCHIVE_RETAIN_INVOICES", 1095*24*time.Hour),
+		ArchiveBatch:            intOr("ARCHIVE_BATCH", 500),
+		ArchivePrefix:           envOr("ARCHIVE_PREFIX", "archive"),
 
 		CORSAllowedOrigins: splitOr("CORS_ALLOWED_ORIGINS", nil),
 		TrustedProxies:     splitOr("TRUSTED_PROXIES", nil),

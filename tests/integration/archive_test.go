@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,7 +80,10 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 
 	store := &memStore{objects: map[string][]byte{}}
-	a := archive.New(db, store, archive.Options{RetainFor: 730 * 24 * time.Hour, Batch: 10})
+	a := archive.New(db, store, archive.Options{
+		Retain: map[string]time.Duration{archive.EntityOrder: 730 * 24 * time.Hour},
+		Batch:  10,
+	})
 
 	sum, err := a.Run(ctx())
 	if err != nil {
@@ -88,8 +92,15 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if sum.Orders != 1 || sum.Failed != 0 {
 		t.Fatalf("expected exactly the old completed order archived, got %+v", sum)
 	}
-	if len(store.objects) != 1 {
-		t.Fatalf("expected one object in the store, got %d", len(store.objects))
+	// One Parquet file per table that had rows: orders, order_status_history,
+	// shipments — under archive/orders/<table>/dt=YYYY-MM-DD/<run>.parquet.
+	if len(store.objects) != 3 {
+		t.Fatalf("expected three files (one per populated table), got %d: %v", len(store.objects), keys(store.objects))
+	}
+	for k := range store.objects {
+		if !strings.HasPrefix(k, "archive/orders/") || !strings.Contains(k, "/dt=") || !strings.HasSuffix(k, ".parquet") {
+			t.Fatalf("unexpected key layout: %s", k)
+		}
 	}
 
 	var n int64
@@ -108,10 +119,10 @@ func TestArchiveRoundTrip(t *testing.T) {
 		}
 	}
 	var cat struct {
-		SizeBytes int64
+		S3Key     string
 		Reference string
 	}
-	if err := db.Table("archive_catalog").Select("size_bytes, reference").Where("entity = 'order' AND entity_id = ?", old.ID).Scan(&cat).Error; err != nil || cat.SizeBytes == 0 {
+	if err := db.Table("archive_catalog").Select("s3_key, reference").Where("entity = 'order' AND entity_id = ?", old.ID).Scan(&cat).Error; err != nil || cat.S3Key == "" {
 		t.Fatalf("catalogue row missing or empty: %v %+v", err, cat)
 	}
 	if cat.Reference != old.OrderNumber {
@@ -152,4 +163,12 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if err := a.Restore(ctx(), archive.EntityOrder, old.ID); err == nil {
 		t.Fatal("restoring twice should be refused")
 	}
+}
+
+func keys(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

@@ -27,6 +27,12 @@ extra_environment = [
   { name = "DB_NAME", value = "karlo_business" },
   { name = "DB_SSLMODE", value = "require" },
   { name = "NOTIFY_TIMEOUT", value = "5s" },
+  # Cold storage: how long each aggregate stays in Postgres after its last
+  # change before the nightly archiver moves it to Glacier (as Parquet).
+  # Go durations; hours are the largest unit, so 365d = 8760h.
+  { name = "ARCHIVE_RETAIN_ORDERS", value = "8760h" },     # 1 year after delivery
+  { name = "ARCHIVE_RETAIN_AGREEMENTS", value = "17520h" }, # 2 years after expiry
+  { name = "ARCHIVE_RETAIN_INVOICES", value = "26280h" },   # 3 years after payment
 ]
 
 

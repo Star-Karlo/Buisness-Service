@@ -2,12 +2,23 @@
 // into S3 Glacier Deep Archive, and brings them back on request.
 //
 // The legacy monolith did this with a Node cron against Mongo: once a day,
-// find everything that turned 730 days old today, gzip it, put it in Deep
-// Archive, note it in a catalogue, optionally delete. This is the same idea
-// for Postgres, with the one difference that matters in a relational store:
-// an order is not one document but a tree — items, status history, routes,
-// shipments and their documents and handovers, allowances, ratings — and the
-// tree leaves together or not at all.
+// find everything that has aged past its window, compress it, put it in
+// Deep Archive, note it in a catalogue, delete. This is the same idea for
+// Postgres, with two differences that matter in a relational store and a
+// data-lake world:
+//
+//   - An order is not one document but a tree — items, status history,
+//     routes, shipments and their documents and handovers, allowances,
+//     ratings — and the tree leaves together or not at all.
+//   - The files are Parquet, one per table per day, laid out as Hive
+//     partitions (archive/orders/shipments/dt=2026-09-15/…). Athena, Spark
+//     or DuckDB can query years of archived orders directly, without a
+//     restore, and a column-store compresses a table of near-identical rows
+//     far better than one JSON document per order.
+//
+// Each entity has its own retention: an order is rarely opened a year after
+// delivery, an agreement is a contract someone may argue about for longer,
+// an invoice sits under tax rules. See Options.Retain.
 //
 // Order of work in a run is invoices, then orders, then agreements, because
 // each holds a RESTRICT foreign key to the next: an order cannot go while an
@@ -15,15 +26,16 @@
 // against it. Archiving the referrer first is what lets the referent become
 // eligible in the same run.
 //
-// Every aggregate is written before anything is deleted, and deleted in one
-// transaction. A crash between the two leaves an object in S3 and the rows
-// in place; the next run finds the catalogue row already present and only
-// deletes. Nothing is ever lost to a half-run.
+// A run works in chunks: read a chunk of aggregates, write every table's
+// rows for that chunk to S3, then for each aggregate insert its catalogue
+// row and delete its hot rows in one transaction. A crash after the write
+// and before the delete leaves rows in place and a file in S3 that nothing
+// points at; the next run archives them again into a fresh file. Nothing is
+// ever lost to a half-run, and every catalogue row points at a file that
+// exists.
 package archive
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,17 +70,26 @@ type Store interface {
 
 // Options control one run.
 type Options struct {
-	// RetainFor is how long after its last change an aggregate stays hot.
-	// The legacy system used 730 days; a finished order is rarely opened
-	// after a quarter, but disputes and audits reach back two years.
-	RetainFor time.Duration
-	// Batch bounds one run, so a first run against years of backlog is many
-	// short runs rather than one that holds locks for an hour.
+	// Retain is how long after its last change an aggregate of each entity
+	// stays hot. Missing entries fall back to DefaultRetain.
+	Retain map[string]time.Duration
+	// Batch bounds one run per entity, so a first run against years of
+	// backlog is many short runs rather than one that holds locks for an
+	// hour.
 	Batch int
+	// Chunk is how many aggregates share one set of Parquet files.
+	Chunk int
 	// DryRun reports what would be archived and touches nothing.
 	DryRun bool
 	// Prefix is the key prefix inside the bucket.
 	Prefix string
+}
+
+// DefaultRetain is the hot window per entity when nothing else is set.
+var DefaultRetain = map[string]time.Duration{
+	EntityOrder:     365 * 24 * time.Hour,  // a year after delivery
+	EntityAgreement: 730 * 24 * time.Hour,  // two years after expiry
+	EntityInvoice:   1095 * 24 * time.Hour, // three years after payment
 }
 
 // Archiver runs the archive and restore operations.
@@ -79,11 +101,19 @@ type Archiver struct {
 }
 
 func New(db *gorm.DB, store Store, opts Options) *Archiver {
-	if opts.RetainFor <= 0 {
-		opts.RetainFor = 730 * 24 * time.Hour
+	if opts.Retain == nil {
+		opts.Retain = map[string]time.Duration{}
+	}
+	for k, v := range DefaultRetain {
+		if opts.Retain[k] <= 0 {
+			opts.Retain[k] = v
+		}
 	}
 	if opts.Batch <= 0 {
 		opts.Batch = 500
+	}
+	if opts.Chunk <= 0 {
+		opts.Chunk = 200
 	}
 	if opts.Prefix == "" {
 		opts.Prefix = "archive"
@@ -96,6 +126,7 @@ type Summary struct {
 	Invoices   int `json:"invoices"`
 	Orders     int `json:"orders"`
 	Agreements int `json:"agreements"`
+	Files      int `json:"files"`
 	Bytes      int `json:"bytes"`
 	Failed     int `json:"failed"`
 }
@@ -103,145 +134,182 @@ type Summary struct {
 // Run archives everything eligible, up to the batch size per entity.
 func (a *Archiver) Run(ctx context.Context) (Summary, error) {
 	var sum Summary
-	cutoff := a.now().Add(-a.opts.RetainFor)
+	runID := a.now().UTC().Format("20060102T150405Z")
 
 	for _, e := range []entity{invoiceEntity, orderEntity, agreementEntity} {
+		cutoff := a.now().Add(-a.opts.Retain[e.name])
 		ids, err := e.candidates(ctx, a.db, cutoff, a.opts.Batch)
 		if err != nil {
 			return sum, fmt.Errorf("archive: listing %s candidates: %w", e.name, err)
 		}
-		slog.InfoContext(ctx, "archive candidates", "entity", e.name, "count", len(ids), "cutoff", cutoff, "dryRun", a.opts.DryRun)
-		for _, id := range ids {
+		slog.InfoContext(ctx, "archive candidates", "entity", e.name, "count", len(ids),
+			"retain", a.opts.Retain[e.name].String(), "cutoff", cutoff, "dryRun", a.opts.DryRun)
+
+		for start := 0; start < len(ids); start += a.opts.Chunk {
 			if err := ctx.Err(); err != nil {
 				return sum, err
 			}
-			n, err := a.archiveOne(ctx, e, id)
+			end := min(start+a.opts.Chunk, len(ids))
+			done, err := a.archiveChunk(ctx, e, ids[start:end], runID, &sum)
 			if err != nil {
-				sum.Failed++
-				slog.ErrorContext(ctx, "archive failed", "entity", e.name, "id", id, "error", err)
+				// The whole chunk failed before any delete — S3 or the
+				// catalogue read. Count them and carry on to the next
+				// entity; the rows are still hot and the next run retries.
+				sum.Failed += len(ids[start:end])
+				slog.ErrorContext(ctx, "archive chunk failed", "entity", e.name, "from", start, "to", end, "error", err)
 				continue
 			}
-			sum.Bytes += n
 			switch e.name {
 			case EntityInvoice:
-				sum.Invoices++
+				sum.Invoices += done
 			case EntityOrder:
-				sum.Orders++
+				sum.Orders += done
 			case EntityAgreement:
-				sum.Agreements++
+				sum.Agreements += done
 			}
 		}
 	}
 	return sum, nil
 }
 
-// bundle is what one archived aggregate looks like on disk: the root row and
-// each dependent table's rows, as the database returned them. JSON rather
-// than a binary format so it is readable with nothing but gunzip, decades
-// from now, by whoever has to answer a question about it.
-type bundle struct {
-	Entity     string                      `json:"entity"`
-	ID         uuid.UUID                   `json:"id"`
-	ArchivedAt time.Time                   `json:"archivedAt"`
-	Tables     map[string][]map[string]any `json:"tables"`
+// pendingRow is one aggregate read into memory, waiting for its chunk's
+// files to land before it can be committed.
+type pendingRow struct {
+	id     uuid.UUID
+	root   map[string]any
+	counts map[string]int
+	// alreadyCatalogued means a previous run wrote this aggregate's files
+	// and died before deleting; only the delete remains.
+	alreadyCatalogued bool
 }
 
-func (a *Archiver) archiveOne(ctx context.Context, e entity, id uuid.UUID) (int, error) {
-	// Idempotency: a catalogue row means the object is already in S3, and a
-	// previous run died before deleting. Only the delete remains.
-	var existing catalogRow
-	err := a.db.WithContext(ctx).Where("entity = ? AND entity_id = ? AND restored_at IS NULL", e.name, id).First(&existing).Error
-	if err == nil {
-		if a.opts.DryRun {
-			return 0, nil
+func (a *Archiver) archiveChunk(ctx context.Context, e entity, ids []uuid.UUID, runID string, sum *Summary) (int, error) {
+	date := a.now().UTC().Format("2006-01-02")
+	// One buffer of rows per table, across every aggregate in the chunk.
+	perTable := make(map[string][]map[string]any, len(e.tables))
+	pending := make([]pendingRow, 0, len(ids))
+
+	for _, id := range ids {
+		var existing catalogRow
+		err := a.db.WithContext(ctx).Where("entity = ? AND entity_id = ? AND restored_at IS NULL", e.name, id).First(&existing).Error
+		if err == nil {
+			pending = append(pending, pendingRow{id: id, alreadyCatalogued: true})
+			continue
 		}
-		return 0, a.deleteHot(ctx, e, id)
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return 0, err
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, err
+		}
+
+		p := pendingRow{id: id, counts: map[string]int{}}
+		for _, t := range e.tables {
+			rows, err := readRows(ctx, a.db, t, id)
+			if err != nil {
+				return 0, fmt.Errorf("reading %s: %w", t.name, err)
+			}
+			for _, r := range rows {
+				r[colRoot] = id.String()
+				r[colEntity] = e.name
+			}
+			perTable[t.name] = append(perTable[t.name], rows...)
+			p.counts[t.name] = len(rows)
+			if t.name == e.tables[0].name {
+				if len(rows) != 1 {
+					return 0, fmt.Errorf("expected one %s row for %s, found %d", e.name, id, len(rows))
+				}
+				p.root = rows[0]
+			}
+		}
+		pending = append(pending, p)
 	}
 
-	b := bundle{Entity: e.name, ID: id, ArchivedAt: a.now(), Tables: map[string][]map[string]any{}}
-	counts := map[string]int{}
+	// Write the chunk's files: one per table that has rows.
+	// archive/orders/shipments/dt=2026-09-15/20260915T190000Z.parquet
+	keyFor := func(table string) string {
+		return fmt.Sprintf("%s/%ss/%s/dt=%s/%s.parquet", a.opts.Prefix, e.name, table, date, runID)
+	}
+	rootSHA := ""
+	files := 0
 	for _, t := range e.tables {
-		rows, err := readRows(ctx, a.db, t, id)
-		if err != nil {
-			return 0, fmt.Errorf("reading %s: %w", t.name, err)
+		rows := perTable[t.name]
+		if len(rows) == 0 {
+			continue
 		}
-		b.Tables[t.name] = rows
-		counts[t.name] = len(rows)
+		ts, err := schemaFor(ctx, a.db, t.name)
+		if err != nil {
+			return 0, fmt.Errorf("schema of %s: %w", t.name, err)
+		}
+		data, err := ts.encode(rows)
+		if err != nil {
+			return 0, fmt.Errorf("encoding %s: %w", t.name, err)
+		}
+		if t.name == e.tables[0].name {
+			sha := sha256.Sum256(data)
+			rootSHA = hex.EncodeToString(sha[:])
+		}
+		if a.opts.DryRun {
+			slog.InfoContext(ctx, "would write", "key", keyFor(t.name), "rows", len(rows), "bytes", len(data))
+			sum.Bytes += len(data)
+			files++
+			continue
+		}
+		class, err := a.store.PutCold(ctx, keyFor(t.name), data, "application/vnd.apache.parquet")
+		if err != nil {
+			return 0, fmt.Errorf("writing %s: %w", keyFor(t.name), err)
+		}
+		slog.InfoContext(ctx, "archive file written", "key", keyFor(t.name), "rows", len(rows), "bytes", len(data), "class", class)
+		sum.Bytes += len(data)
+		files++
 	}
-	root := b.Tables[e.tables[0].name]
-	if len(root) != 1 {
-		return 0, fmt.Errorf("expected one %s row, found %d", e.name, len(root))
-	}
-
-	raw, err := json.Marshal(b)
-	if err != nil {
-		return 0, err
-	}
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(raw); err != nil {
-		return 0, err
-	}
-	if err := gz.Close(); err != nil {
-		return 0, err
-	}
-	sum := sha256.Sum256(buf.Bytes())
-
-	when := b.ArchivedAt
-	if ts, ok := root[0]["updated_at"].(time.Time); ok {
-		when = ts
-	}
-	key := fmt.Sprintf("%s/%s/%04d/%02d/%s.json.gz", a.opts.Prefix, e.name+"s", when.Year(), when.Month(), id)
+	sum.Files += files
 
 	if a.opts.DryRun {
-		slog.InfoContext(ctx, "would archive", "entity", e.name, "id", id, "key", key, "bytes", buf.Len(), "rows", counts)
-		return buf.Len(), nil
-	}
-
-	class, err := a.store.PutCold(ctx, key, buf.Bytes(), "application/gzip")
-	if err != nil {
-		return 0, fmt.Errorf("writing %s: %w", key, err)
-	}
-
-	countsJSON, _ := json.Marshal(counts)
-	row := catalogRow{
-		Entity:       e.name,
-		EntityID:     id,
-		CompanyID:    uuidField(root[0], e.companyColumn),
-		Reference:    stringField(root[0], e.referenceColumn),
-		S3Key:        key,
-		StorageClass: class,
-		SizeBytes:    int64(buf.Len()),
-		SHA256:       hex.EncodeToString(sum[:]),
-		RowCounts:    string(countsJSON),
-		ArchivedAt:   b.ArchivedAt,
-	}
-	if ts, ok := root[0]["updated_at"].(time.Time); ok {
-		row.SourceUpdatedAt = &ts
-	}
-
-	// Catalogue row and hot-row deletion in one transaction: either the
-	// database says "archived, gone" or it says nothing happened.
-	err = a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&row).Error; err != nil {
-			return err
+		for _, p := range pending {
+			slog.InfoContext(ctx, "would archive", "entity", e.name, "id", p.id, "rows", p.counts)
 		}
-		return deleteHotTx(tx, e, id)
-	})
-	if err != nil {
-		return 0, fmt.Errorf("committing %s: %w", key, err)
+		return len(pending), nil
 	}
-	slog.InfoContext(ctx, "archived", "entity", e.name, "id", id, "key", key, "bytes", buf.Len(), "class", class)
-	return buf.Len(), nil
-}
 
-func (a *Archiver) deleteHot(ctx context.Context, e entity, id uuid.UUID) error {
-	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return deleteHotTx(tx, e, id)
-	})
+	// Commit each aggregate: catalogue row and hot-row deletion in one
+	// transaction, so the database either says "archived, gone" or says
+	// nothing happened.
+	done := 0
+	for _, p := range pending {
+		var err error
+		if p.alreadyCatalogued {
+			err = a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return deleteHotTx(tx, e, p.id) })
+		} else {
+			countsJSON, _ := json.Marshal(p.counts)
+			row := catalogRow{
+				Entity:       e.name,
+				EntityID:     p.id,
+				CompanyID:    uuidField(p.root, e.companyColumn),
+				Reference:    stringField(p.root, e.referenceColumn),
+				S3Key:        keyFor("{table}"),
+				StorageClass: "DEEP_ARCHIVE",
+				SizeBytes:    0,
+				SHA256:       rootSHA,
+				RowCounts:    string(countsJSON),
+				ArchivedAt:   a.now(),
+			}
+			if ts, ok := p.root["updated_at"].(time.Time); ok {
+				row.SourceUpdatedAt = &ts
+			}
+			err = a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Create(&row).Error; err != nil {
+					return err
+				}
+				return deleteHotTx(tx, e, p.id)
+			})
+		}
+		if err != nil {
+			sum.Failed++
+			slog.ErrorContext(ctx, "archive commit failed", "entity", e.name, "id", p.id, "error", err)
+			continue
+		}
+		done++
+	}
+	slog.InfoContext(ctx, "archived", "entity", e.name, "count", done, "files", files, "run", runID)
+	return done, nil
 }
 
 // deleteHotTx deletes the root row; every dependent table cascades from it.
@@ -261,10 +329,11 @@ func deleteHotTx(tx *gorm.DB, e entity, id uuid.UUID) error {
 // Restore brings one aggregate back into the hot database.
 //
 // Deep Archive is not readable on demand: the first call asks Glacier to
-// thaw the object and returns ErrColdObject; a call hours later finds it
-// readable and inserts the rows. The catalogue row stays, marked restored,
-// so the same aggregate is not archived again the next night — it will be,
-// once it goes cold again past the retention window, under a fresh key.
+// thaw the day's files and returns storage.ErrColdObject; a call hours
+// later finds them readable, picks this aggregate's rows out of each, and
+// inserts them parents-first. The catalogue row stays, marked restored, so
+// the aggregate is not archived again the same night — it will be, once it
+// goes cold again, into a fresh day's files.
 func (a *Archiver) Restore(ctx context.Context, entityName string, id uuid.UUID) error {
 	e, ok := entities[entityName]
 	if !ok {
@@ -278,40 +347,79 @@ func (a *Archiver) Restore(ctx context.Context, entityName string, id uuid.UUID)
 		return fmt.Errorf("archive: %s %s was already restored at %s", e.name, id, row.RestoredAt)
 	}
 
-	raw, err := a.store.GetCold(ctx, row.S3Key)
-	if err != nil {
-		return err
+	var counts map[string]int
+	_ = json.Unmarshal([]byte(row.RowCounts), &counts)
+
+	// Ask for every file first, so one thaw request covers them all rather
+	// than one per call hours apart.
+	perTable := map[string][]map[string]any{}
+	var cold error
+	for _, t := range e.tables {
+		if counts[t.name] == 0 {
+			continue
+		}
+		key := strings.ReplaceAll(row.S3Key, "{table}", t.name)
+		data, err := a.store.GetCold(ctx, key)
+		if err != nil {
+			if cold == nil {
+				cold = err
+			}
+			continue
+		}
+		if t.name == e.tables[0].name && row.SHA256 != "" {
+			sha := sha256.Sum256(data)
+			if hex.EncodeToString(sha[:]) != row.SHA256 {
+				return fmt.Errorf("archive: %s does not match its recorded checksum", key)
+			}
+		}
+		rows, err := decode(data, id.String())
+		if err != nil {
+			return fmt.Errorf("archive: decoding %s: %w", key, err)
+		}
+		if len(rows) != counts[t.name] {
+			return fmt.Errorf("archive: %s holds %d rows for %s, catalogue says %d", key, len(rows), id, counts[t.name])
+		}
+		perTable[t.name] = rows
 	}
-	sum := sha256.Sum256(raw)
-	if hex.EncodeToString(sum[:]) != row.SHA256 {
-		return fmt.Errorf("archive: %s does not match its recorded checksum", row.S3Key)
-	}
-	gz, err := gzip.NewReader(bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	var b bundle
-	if err := json.NewDecoder(gz).Decode(&b); err != nil {
-		return fmt.Errorf("archive: decoding %s: %w", row.S3Key, err)
+	if cold != nil {
+		return cold
 	}
 
 	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Parents before children, which is the order the tables are listed in.
 		for _, t := range e.tables {
-			for _, r := range b.Tables[t.name] {
-				if err := tx.Table(t.name).Create(r).Error; err != nil {
+			for _, r := range perTable[t.name] {
+				cols := columnsOf(r)
+				vals := make([]any, 0, len(cols))
+				for _, c := range cols {
+					vals = append(vals, r[c])
+				}
+				if err := insertRow(tx, t.name, cols, vals); err != nil {
 					return fmt.Errorf("restoring %s: %w", t.name, err)
 				}
 			}
 		}
-		now := a.now()
-		return tx.Model(&catalogRow{}).Where("id = ?", row.ID).Update("restored_at", now).Error
+		return tx.Model(&catalogRow{}).Where("id = ?", row.ID).Update("restored_at", a.now()).Error
 	})
 }
 
+// insertRow writes one row by explicit column list. Values are the Parquet
+// scalars; Postgres casts the strings into uuid, timestamptz, numeric and
+// jsonb from the column's declared type.
+func insertRow(tx *gorm.DB, table string, cols []string, vals []any) error {
+	quoted := make([]string, len(cols))
+	marks := make([]string, len(cols))
+	for i, c := range cols {
+		quoted[i] = `"` + c + `"`
+		marks[i] = "?"
+	}
+	sql := fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, table, strings.Join(quoted, ", "), strings.Join(marks, ", "))
+	return tx.Exec(sql, vals...).Error
+}
+
 type catalogRow struct {
-	ID              uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
-	Entity          string
+	ID              uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	Entity          string     `gorm:"column:entity"`
 	EntityID        uuid.UUID  `gorm:"type:uuid"`
 	CompanyID       *uuid.UUID `gorm:"type:uuid"`
 	Reference       *string
