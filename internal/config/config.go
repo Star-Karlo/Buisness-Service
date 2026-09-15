@@ -147,7 +147,7 @@ func Load() (*Config, error) {
 		TelemetryKey:            envOr("TELEMETRY_INGEST_KEY", ""),
 		GeofencePollInterval:    durationOr("GEOFENCE_POLL_INTERVAL", time.Minute),
 		ArchiveRetainOrders:     durationOr("ARCHIVE_RETAIN_ORDERS", 365*24*time.Hour),
-		ArchiveRetainAgreements: durationOr("ARCHIVE_RETAIN_AGREEMENTS", 730*24*time.Hour),
+		ArchiveRetainAgreements: durationOr("ARCHIVE_RETAIN_AGREEMENTS", 365*24*time.Hour),
 		ArchiveRetainInvoices:   durationOr("ARCHIVE_RETAIN_INVOICES", 1095*24*time.Hour),
 		ArchiveBatch:            intOr("ARCHIVE_BATCH", 500),
 		ArchivePrefix:           envOr("ARCHIVE_PREFIX", "archive"),

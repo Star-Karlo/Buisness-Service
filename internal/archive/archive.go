@@ -88,7 +88,7 @@ type Options struct {
 // DefaultRetain is the hot window per entity when nothing else is set.
 var DefaultRetain = map[string]time.Duration{
 	EntityOrder:     365 * 24 * time.Hour,  // a year after delivery
-	EntityAgreement: 730 * 24 * time.Hour,  // two years after expiry
+	EntityAgreement: 365 * 24 * time.Hour,  // a year after expiry
 	EntityInvoice:   1095 * 24 * time.Hour, // three years after payment
 }
 
