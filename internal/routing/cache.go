@@ -28,7 +28,7 @@ import (
 func CacheKey(points []Point, profile Profile, avoidTolls bool) string {
 	h := sha256.New()
 
-	fmt.Fprintf(h, "v1|%s|%t|", profile, avoidTolls)
+	_, _ = fmt.Fprintf(h, "v1|%s|%t|", profile, avoidTolls)
 	for _, p := range points {
 		h.Write([]byte(strconv.FormatFloat(round5(p.Lon), 'f', 5, 64)))
 		h.Write([]byte{','})

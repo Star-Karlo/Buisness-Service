@@ -85,7 +85,7 @@ func TestRoundTripAgainstRealS3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(res.Body)
 		t.Fatalf("upload failed: %d %s", res.StatusCode, msg)
@@ -99,7 +99,7 @@ func TestRoundTripAgainstRealS3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer got.Body.Close()
+	defer func() { _ = got.Body.Close() }()
 	read, _ := io.ReadAll(got.Body)
 	if string(read) != body {
 		t.Fatalf("round trip changed the bytes: got %q", read)
@@ -113,7 +113,7 @@ func TestRoundTripAgainstRealS3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res2.Body.Close()
+	defer func() { _ = res2.Body.Close() }()
 	if res2.StatusCode == http.StatusOK {
 		t.Fatal("a signed URL must not accept a different Content-Type")
 	}

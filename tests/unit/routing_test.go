@@ -23,7 +23,7 @@ func TestProfileValidation(t *testing.T) {
 		}
 	}
 	for _, p := range []routing.Profile{"small_truck", "bike", "scooter", "driving", ""} {
-		if routing.Profile(p).Valid() {
+		if p.Valid() {
 			t.Errorf("%q is not a MAPID profile and must be refused", p)
 		}
 	}

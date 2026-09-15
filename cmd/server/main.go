@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/karlo/business-service/internal/platform/dbmigrate"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"slices"
 	"syscall"
 	"time"
+
+	"github.com/karlo/business-service/internal/platform/dbmigrate"
 
 	"github.com/karlo/business-service/internal/clients"
 	"github.com/karlo/business-service/internal/config"
