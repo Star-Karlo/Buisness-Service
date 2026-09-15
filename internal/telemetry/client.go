@@ -115,6 +115,11 @@ func New(baseURL, ingestKey string) *Client {
 
 func (c *Client) Configured() bool { return c != nil && c.baseURL != "" }
 
+// Authenticated reports whether reads would carry a key. The base URL has a
+// default, so Configured alone is true on every deployment; a background job
+// that would only ever be answered 401 should check this instead.
+func (c *Client) Authenticated() bool { return c.Configured() && c.key != "" }
+
 // maxIMEIsPerRequest is the tracking service's documented ceiling on /v1/live.
 // Larger sets are split rather than truncated: silently dropping the tail would
 // make a fleet's last trucks permanently invisible.

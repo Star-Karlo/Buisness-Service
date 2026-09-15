@@ -8,9 +8,11 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 )
 
@@ -80,6 +83,7 @@ var allowedTypes = map[Purpose][]string{
 
 type Client struct {
 	bucket  string
+	s3      *s3.Client
 	presign *s3.PresignClient
 	putTTL  time.Duration
 	getTTL  time.Duration
@@ -128,6 +132,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 
 	return &Client{
 		bucket:  cfg.Bucket,
+		s3:      client,
 		presign: s3.NewPresignClient(client),
 		// Long enough for a slow mobile connection to finish a 15 MB scan,
 		// short enough that a leaked URL is not a standing grant.
@@ -221,4 +226,78 @@ func (c *Client) PresignGet(ctx context.Context, key string) (string, time.Durat
 // GET for another tenant's contract simply by pasting its key.
 func OwnedBy(key, companyID string) bool {
 	return companyID != "" && strings.HasPrefix(key, companyID+"/")
+}
+
+// ErrColdObject is returned by GetCold while the object is still frozen in
+// Glacier. The restore has been requested; call again later.
+var ErrColdObject = errors.New("storage: object is in cold storage; restore requested, try again later")
+
+// PutCold writes an object straight into Glacier Deep Archive — the cheapest
+// class S3 has, at the price of hours to read back. For the archiver, which
+// writes what will almost never be read. Returns the class used so the
+// catalogue can record it; an S3-compatible server that does not know the
+// class (MinIO) gets STANDARD, and the catalogue says so.
+func (c *Client) PutCold(ctx context.Context, key string, body []byte, contentType string) (string, error) {
+	if !c.Configured() {
+		return "", ErrNotConfigured
+	}
+	class := types.StorageClassDeepArchive
+	_, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:       aws.String(c.bucket),
+		Key:          aws.String(key),
+		Body:         bytes.NewReader(body),
+		ContentType:  aws.String(contentType),
+		StorageClass: class,
+	})
+	if err != nil {
+		return "", fmt.Errorf("storage: put %s: %w", key, err)
+	}
+	return string(class), nil
+}
+
+// GetCold reads an archived object. If Glacier still holds it frozen, a bulk
+// restore (the cheapest tier; up to 48 hours) is requested and ErrColdObject
+// returned; once thawed, the same call returns the bytes.
+func (c *Client) GetCold(ctx context.Context, key string) ([]byte, error) {
+	if !c.Configured() {
+		return nil, ErrNotConfigured
+	}
+	head, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(c.bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, fmt.Errorf("storage: head %s: %w", key, err)
+	}
+	frozen := head.StorageClass == types.StorageClassDeepArchive || head.StorageClass == types.StorageClassGlacier
+	if frozen {
+		// Restore header: absent = never requested; ongoing-request="true"
+		// = in progress; ongoing-request="false" = thawed copy available.
+		r := aws.ToString(head.Restore)
+		switch {
+		case strings.Contains(r, `ongoing-request="false"`):
+			// Thawed; fall through to the read.
+		case strings.Contains(r, `ongoing-request="true"`):
+			return nil, ErrColdObject
+		default:
+			_, err := c.s3.RestoreObject(ctx, &s3.RestoreObjectInput{
+				Bucket: aws.String(c.bucket),
+				Key:    aws.String(key),
+				RestoreRequest: &types.RestoreRequest{
+					// Ten days readable is enough to run the restore and
+					// check the result; the object then refreezes on its own.
+					Days:                 aws.Int32(10),
+					GlacierJobParameters: &types.GlacierJobParameters{Tier: types.TierBulk},
+				},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("storage: restore %s: %w", key, err)
+			}
+			return nil, ErrColdObject
+		}
+	}
+
+	out, err := c.s3.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(c.bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, fmt.Errorf("storage: get %s: %w", key, err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	return io.ReadAll(out.Body)
 }

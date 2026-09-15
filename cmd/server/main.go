@@ -100,6 +100,13 @@ func run() error {
 		return err
 	}
 
+	// `server archive [--dry-run]` and `server restore <entity> <id>`: cold
+	// storage, run as one-off ECS tasks from the same image and secrets as
+	// the service. See internal/archive.
+	if slices.Contains(os.Args[1:], "archive") || slices.Contains(os.Args[1:], "restore") {
+		return runArchive(cfg, db, os.Args[1:])
+	}
+
 	// Optional. Without REDIS_ADDR this is a no-op and company settings are
 	// fetched from the authentication service on every call.
 	cacheClient := cache.FromEnv("business")
@@ -274,6 +281,13 @@ func run() error {
 
 	stopEviction := startRouteCacheEviction(routeCacheRepo)
 	defer stopEviction()
+
+	// Arrival evidence from FMS positions. Idle until TELEMETRY_INGEST_KEY is
+	// set; see services.GeofenceWatcher for why this polls rather than waits
+	// for FMS to push.
+	geofenceWatcher := services.NewGeofenceWatcher(shipmentRepo, shipmentService, masterDataClient, telemetryClient, cfg.GeofencePollInterval)
+	stopGeofence := geofenceWatcher.Start()
+	defer stopGeofence()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

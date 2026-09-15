@@ -268,6 +268,9 @@ type Order struct {
 	Status      string `gorm:"-" json:"status"`
 	StatusAlias string `gorm:"-" json:"statusAlias"`
 
+	// DriverID is the master-data driver (Mongo ObjectId hex). DriverUserID
+	// is that driver's login when they have one — most do not.
+	DriverID     *string    `gorm:"column:driver_id" json:"driverId,omitempty"`
 	DriverUserID *uuid.UUID `gorm:"type:uuid" json:"driverUserId,omitempty"`
 	// TruckID is a Mongo ObjectId hex string, owned by the master data service.
 	TruckID *string `gorm:"column:truck_id" json:"truckId,omitempty"`
@@ -365,6 +368,7 @@ type Shipment struct {
 	ID      uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	OrderID uuid.UUID `gorm:"type:uuid;not null" json:"orderId"`
 
+	DriverID     *string    `gorm:"column:driver_id" json:"driverId,omitempty"`
 	DriverUserID *uuid.UUID `gorm:"type:uuid" json:"driverUserId,omitempty"`
 	TruckID      *string    `gorm:"column:truck_id" json:"truckId,omitempty"`
 

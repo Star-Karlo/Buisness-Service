@@ -17,11 +17,16 @@ locals {
     { name = "JWT_PUBLIC_KEY", valueFrom = local.platform.secret_arns.jwt_public },
     { name = "SERVICE_TOKEN", valueFrom = "${local.platform.secret_arns.service_tokens}:business-service::" },
     { name = "ACCEPTED_SERVICE_TOKENS", valueFrom = "${local.platform.secret_arns.service_tokens}:all::" },
+    # Third-party keys. Empty until somebody fills the platform's integrations
+    # secret in; the service starts either way, with routing and telemetry off.
+    { name = "MAPID_KEY", valueFrom = "${local.platform.secret_arns.integrations}:mapid_key::" },
+    { name = "TELEMETRY_INGEST_KEY", valueFrom = "${local.platform.secret_arns.integrations}:fms_ingest_key::" },
   ]
 
   secret_arns = [
     local.platform.secret_arns.rds_master,
     local.platform.secret_arns.jwt_public,
     local.platform.secret_arns.service_tokens,
+    local.platform.secret_arns.integrations,
   ]
 }

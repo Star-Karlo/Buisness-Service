@@ -94,7 +94,9 @@ resource "aws_iam_role_policy" "task_exec_access" {
 # every tenant's files.
 data "aws_iam_policy_document" "task_storage" {
   statement {
-    actions   = ["s3:PutObject", "s3:GetObject"]
+    # RestoreObject is the archiver's: asking Glacier to thaw a bundle before
+    # it can be read back. Still object-level, still this bucket.
+    actions   = ["s3:PutObject", "s3:GetObject", "s3:RestoreObject"]
     resources = ["${local.platform.uploads_bucket_arn}/*"]
   }
 }

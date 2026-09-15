@@ -289,6 +289,32 @@ func (r *ShipmentRepository) FindByOrder(ctx context.Context, orderID uuid.UUID)
 	return one(&s, err)
 }
 
+// ActiveShipment is a shipment in flight together with the order fields the
+// geofence watcher needs, read in one query rather than one per shipment.
+type ActiveShipment struct {
+	ShipmentID             uuid.UUID `gorm:"column:shipment_id"`
+	OrderID                uuid.UUID `gorm:"column:order_id"`
+	StatusCode             string    `gorm:"column:status_code"`
+	TruckID                *string   `gorm:"column:truck_id"`
+	OriginWarehouseID      *string   `gorm:"column:origin_warehouse_id"`
+	DestinationWarehouseID *string   `gorm:"column:destination_warehouse_id"`
+}
+
+// ListActive returns every shipment that is neither finished nor cancelled and
+// has a truck to watch. The geofence watcher polls this on a timer, so it
+// selects only the columns it needs.
+func (r *ShipmentRepository) ListActive(ctx context.Context) ([]ActiveShipment, error) {
+	var out []ActiveShipment
+	err := r.db.WithContext(ctx).
+		Table("shipments s").
+		Select("s.id AS shipment_id, s.order_id, s.status_code, s.truck_id, o.origin_warehouse_id, o.destination_warehouse_id").
+		Joins("JOIN orders o ON o.id = s.order_id").
+		Where("s.finished_at IS NULL AND s.status_code NOT IN ? AND s.truck_id IS NOT NULL AND s.truck_id <> ''",
+			[]string{models.ShipmentFinished, models.ShipmentCancelled}).
+		Scan(&out).Error
+	return out, err
+}
+
 // FindActiveByDriver answers the telemetry service's question: which shipment
 // do this driver's position reports belong to?
 func (r *ShipmentRepository) FindActiveByDriver(ctx context.Context, driverID uuid.UUID) (*models.Shipment, error) {

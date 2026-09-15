@@ -13,6 +13,7 @@ import (
 	"github.com/karlo/business-service/internal/clients"
 	"github.com/karlo/business-service/internal/fieldconfig"
 	"github.com/karlo/business-service/internal/models"
+	masterdatav1 "github.com/karlo/business-service/internal/platform/genproto/karlo/masterdata/v1"
 	notificationv1 "github.com/karlo/business-service/internal/platform/genproto/karlo/notification/v1"
 	"github.com/karlo/business-service/internal/platform/query"
 	"github.com/karlo/business-service/internal/repository"
@@ -668,10 +669,13 @@ func orderEventFor(status string) (notificationv1.EventType, bool) {
 
 // AssignDriver puts a driver and truck on an order and opens its shipment.
 //
-// The legacy endpoint wrote both ids with no validation whatsoever. Here the
-// pairing is confirmed against the master data service first, because a driver
-// who is not assigned to a truck cannot lawfully drive it.
-func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID, driverID uuid.UUID, truckID string) (*models.Order, error) {
+// The driver is a master-data record — a person with a phone and a licence,
+// who usually has no login. The legacy endpoint wrote both ids with no
+// validation whatsoever. Here the pairing is confirmed against the master
+// data service first, because a driver who is not assigned to a truck cannot
+// lawfully drive it; and the driver is told, on WhatsApp to the phone master
+// data holds and in-app when they do have a login.
+func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID uuid.UUID, driverID, truckID string) (*models.Order, error) {
 	order, err := s.orders.FindByID(ctx, actor.CompanyID, orderID)
 	if err != nil {
 		return nil, err
@@ -687,24 +691,41 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID, d
 		return nil, fmt.Errorf("%w: %v", ErrTransition, err)
 	}
 
-	paired, err := s.masterdata.DriverIsPairedWithTruck(ctx, driverID.String(), truckID)
+	driver, err := s.masterdata.GetDriver(ctx, driverID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: driver %s not found", ErrValidation, driverID)
+	}
+	if driver.GetStatus() != "" && driver.GetStatus() != "active" {
+		return nil, fmt.Errorf("%w: driver %s is %s", ErrValidation, driver.GetFullName(), driver.GetStatus())
+	}
+
+	paired, err := s.masterdata.DriverIsPairedWithTruck(ctx, driverID, truckID)
 	if err != nil {
 		return nil, fmt.Errorf("verify driver pairing: %w", err)
 	}
 	if !paired {
-		return nil, fmt.Errorf("%w: driver %s is not assigned to truck %s", ErrValidation, driverID, truckID)
+		return nil, fmt.Errorf("%w: driver %s is not assigned to truck %s", ErrValidation, driver.GetFullName(), truckID)
 	}
 
+	// The login, when there is one, is what the driver app authenticates as
+	// and what the handover checks against.
+	var driverUserID *uuid.UUID
+	if u, err := uuid.Parse(driver.GetUserId()); err == nil && u != uuid.Nil {
+		driverUserID = &u
+	}
+
+	fields := map[string]interface{}{
+		"driver_id":      driverID,
+		"driver_user_id": driverUserID,
+		"truck_id":       truckID,
+	}
 	change := repository.StatusChange{
 		OrderID: orderID,
 		From:    order.StatusCode,
 		To:      models.OrderAssigned,
 		Actor:   &actor.UserID,
 		Source:  models.SourceUser,
-		Fields: map[string]interface{}{
-			"driver_user_id": driverID,
-			"truck_id":       truckID,
-		},
+		Fields:  fields,
 	}
 	if err := s.orders.ApplyStatus(ctx, change); err != nil {
 		return nil, err
@@ -714,7 +735,8 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID, d
 	// moment the work is assigned.
 	shipment := &models.Shipment{
 		OrderID:      orderID,
-		DriverUserID: &driverID,
+		DriverID:     &driverID,
+		DriverUserID: driverUserID,
 		TruckID:      &truckID,
 		StatusCode:   models.ShipmentAssigned,
 	}
@@ -722,19 +744,11 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID, d
 		return nil, fmt.Errorf("create shipment: %w", err)
 	}
 
-	s.notifier.Notify(ctx, clients.Event{
-		Type:           notificationv1.EventType_EVENT_TYPE_ORDER_ASSIGNED_DRIVER,
-		Subject:        clients.Subject{ID: order.ID.String(), Type: "order"},
-		Audience:       clients.ToUsers(driverID.String()),
-		ActorID:        actor.UserID.String(),
-		IdempotencyKey: fmt.Sprintf("order:%s:assigned:%s", orderID, driverID),
-		Params: map[string]interface{}{
-			"orderNumber": order.OrderNumber,
-		},
-	})
+	s.notifyDriverAssigned(ctx, actor, order, driver)
 
 	order.StatusCode = models.OrderAssigned
-	order.DriverUserID = &driverID
+	order.DriverID = &driverID
+	order.DriverUserID = driverUserID
 	order.TruckID = &truckID
 
 	// Plan the truck's run to the loading point. Only possible now: the
@@ -752,6 +766,55 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID, d
 	}
 
 	return order, nil
+}
+
+// notifyDriverAssigned tells the driver about the job on every channel that
+// can reach them: WhatsApp to the phone master data holds, which works for a
+// driver with no account, and in-app/push when they do have a login. Both
+// carry the same idempotency key per channel so a retried assignment does
+// not send twice.
+func (s *OrderService) notifyDriverAssigned(ctx context.Context, actor Actor, order *models.Order, driver *masterdatav1.Driver) {
+	params := map[string]interface{}{
+		"orderNumber": order.OrderNumber,
+		"origin":      s.warehouseName(ctx, order.OriginWarehouseID),
+		"destination": s.warehouseName(ctx, order.DestinationWarehouseID),
+	}
+	base := clients.Event{
+		Type:    notificationv1.EventType_EVENT_TYPE_ORDER_ASSIGNED_DRIVER,
+		Subject: clients.Subject{ID: order.ID.String(), Type: "order"},
+		ActorID: actor.UserID.String(),
+		Params:  params,
+	}
+
+	if phone := driver.GetPhone(); phone != "" {
+		ev := base
+		ev.Audience = clients.ToPhone(phone)
+		ev.IdempotencyKey = fmt.Sprintf("order:%s:assigned:%s:phone", order.ID, driver.GetId())
+		s.notifier.Notify(ctx, ev)
+	}
+	if uid := driver.GetUserId(); uid != "" {
+		ev := base
+		ev.Audience = clients.ToUsers(uid)
+		ev.IdempotencyKey = fmt.Sprintf("order:%s:assigned:%s:user", order.ID, driver.GetId())
+		s.notifier.Notify(ctx, ev)
+	}
+	if driver.GetPhone() == "" && driver.GetUserId() == "" {
+		slog.WarnContext(ctx, "driver assigned but unreachable: no phone and no login",
+			"orderId", order.ID, "driverId", driver.GetId())
+	}
+}
+
+// warehouseName labels a warehouse for a message, or "-" when it cannot be
+// resolved: a notification with a blank is still worth sending.
+func (s *OrderService) warehouseName(ctx context.Context, id *string) string {
+	if id == nil || *id == "" {
+		return "-"
+	}
+	wh, err := s.masterdata.GetWarehouse(ctx, *id)
+	if err != nil || wh.GetName() == "" {
+		return "-"
+	}
+	return wh.GetName()
 }
 
 // draftUpdatable is the allowlist for editing an order.

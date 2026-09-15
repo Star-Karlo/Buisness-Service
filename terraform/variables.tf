@@ -124,7 +124,7 @@ variable "path_patterns" {
   # present in only one of the two works locally and 404s behind the load
   # balancer, or the reverse — and neither failure appears until the environment
   # the path is missing from is exercised.
-  type        = list(string)
+  type = list(string)
   default = [
     "/api/v1/orders*",
     "/api/v1/shipments*",

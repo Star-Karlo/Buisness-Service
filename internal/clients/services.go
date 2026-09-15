@@ -184,7 +184,16 @@ func (m *MasterData) DriverIsPairedWithTruck(ctx context.Context, driverID, truc
 	return false, nil
 }
 
-// ValidateCatalogRefs checks a set of catalogue references before a write.
+// GetDriver resolves a master-data driver: the phone to reach them on and
+// the login they may or may not have.
+func (m *MasterData) GetDriver(ctx context.Context, id string) (*masterdatav1.Driver, error) {
+	resp, err := m.client.GetDriver(ctx, &masterdatav1.GetDriverRequest{Id: id})
+	if err != nil {
+		return nil, fmt.Errorf("clients: get driver: %w", err)
+	}
+	return resp.GetDriver(), nil
+}
+
 // ValidateCatalogRefs checks a set of catalogue references before a write.
 //
 // The company is passed explicitly: a reference to another company's private

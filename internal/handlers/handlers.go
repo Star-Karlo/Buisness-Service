@@ -315,9 +315,12 @@ func (h *OrderHandler) AssignDriver(c *gin.Context) {
 		return
 	}
 
-	driverID, err := uuid.Parse(body.DriverID)
-	if err != nil {
-		response.BadRequest(c, "Invalid driverId")
+	// driverId is the master-data driver id (24 hex characters). A login
+	// user id is not accepted here: the driver record is what a truck is
+	// paired with and what carries the phone the driver is reached on.
+	driverID := strings.TrimSpace(body.DriverID)
+	if len(driverID) != 24 {
+		response.BadRequest(c, "Invalid driverId: expected a master-data driver id")
 		return
 	}
 

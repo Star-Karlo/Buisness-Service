@@ -50,6 +50,17 @@ type Config struct {
 	// positions; dispatch then ranks on last unloading points instead.
 	TelemetryBaseURL string
 	TelemetryKey     string
+	// GeofencePollInterval is how often active shipments' trucks are checked
+	// against their warehouses' geofences. One minute is well inside what a
+	// warehouse notices and one request per tick regardless of fleet size.
+	GeofencePollInterval time.Duration
+
+	// Cold storage. Aggregates untouched for ArchiveRetainFor move to S3
+	// Glacier Deep Archive under ArchivePrefix, ArchiveBatch per entity per
+	// run. See internal/archive.
+	ArchiveRetainFor time.Duration
+	ArchiveBatch     int
+	ArchivePrefix    string
 
 	CORSAllowedOrigins []string
 
@@ -127,8 +138,12 @@ func Load() (*Config, error) {
 		// Telemetry. Optional by design: an empty base URL leaves dispatch
 		// ranking trucks by their last unloading point, which is correct for a
 		// parked truck and the behaviour this service had before.
-		TelemetryBaseURL: envOr("TELEMETRY_BASE_URL", "https://fms-tracking.karlo.id"),
-		TelemetryKey:     envOr("TELEMETRY_INGEST_KEY", ""),
+		TelemetryBaseURL:     envOr("TELEMETRY_BASE_URL", "https://fms-tracking.karlo.id"),
+		TelemetryKey:         envOr("TELEMETRY_INGEST_KEY", ""),
+		GeofencePollInterval: durationOr("GEOFENCE_POLL_INTERVAL", time.Minute),
+		ArchiveRetainFor:     durationOr("ARCHIVE_RETAIN_FOR", 730*24*time.Hour),
+		ArchiveBatch:         intOr("ARCHIVE_BATCH", 500),
+		ArchivePrefix:        envOr("ARCHIVE_PREFIX", "archive"),
 
 		CORSAllowedOrigins: splitOr("CORS_ALLOWED_ORIGINS", nil),
 		TrustedProxies:     splitOr("TRUSTED_PROXIES", nil),

@@ -346,16 +346,19 @@ func (s *ShipmentService) ReportGeofenceEvent(ctx context.Context, shipmentID uu
 	}
 
 	fields := map[string]interface{}{}
+	var firstArrival notificationv1.EventType
 	switch {
-	case entering && order.OriginWarehouseID != nil && *order.OriginWarehouseID == warehouseID:
-		fields["loading_within_geofence"] = true
-		if shipment.ArrivedLoadingAt == nil {
+	case order.OriginWarehouseID != nil && *order.OriginWarehouseID == warehouseID:
+		fields["loading_within_geofence"] = entering
+		if entering && shipment.ArrivedLoadingAt == nil {
 			fields["arrived_loading_at"] = at
+			firstArrival = notificationv1.EventType_EVENT_TYPE_SHIPMENT_ARRIVED_LOADING
 		}
-	case entering && order.DestinationWarehouseID != nil && *order.DestinationWarehouseID == warehouseID:
-		fields["unloading_within_geofence"] = true
-		if shipment.ArrivedUnloadingAt == nil {
+	case order.DestinationWarehouseID != nil && *order.DestinationWarehouseID == warehouseID:
+		fields["unloading_within_geofence"] = entering
+		if entering && shipment.ArrivedUnloadingAt == nil {
 			fields["arrived_unloading_at"] = at
+			firstArrival = notificationv1.EventType_EVENT_TYPE_SHIPMENT_ARRIVED_UNLOADING
 		}
 	default:
 		// A crossing at some other warehouse is not relevant to this shipment.
@@ -371,6 +374,22 @@ func (s *ShipmentService) ReportGeofenceEvent(ctx context.Context, shipmentID uu
 			return shipment.StatusCode, nil
 		}
 		return "", err
+	}
+
+	// The first time the truck reaches a warehouse, the people waiting for it
+	// hear so — the same message the driver's own "arrived" tap would send,
+	// only earlier and without depending on the tap.
+	if firstArrival != notificationv1.EventType_EVENT_TYPE_UNSPECIFIED {
+		s.notifier.Notify(ctx, clients.Event{
+			Type:           firstArrival,
+			Subject:        clients.Subject{ID: order.ID.String(), Type: "order"},
+			Audience:       clients.ToCompanyRoles(order.ShipperCompanyID.String(), models.RoleShipper, models.RoleWarehousePic),
+			IdempotencyKey: fmt.Sprintf("shipment:%s:geofence:%s", order.ID, warehouseID),
+			Params: map[string]interface{}{
+				"orderNumber": order.OrderNumber,
+				"status":      models.StatusLabel(models.DomainShipment, shipment.StatusCode),
+			},
+		})
 	}
 
 	return shipment.StatusCode, nil
