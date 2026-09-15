@@ -30,6 +30,10 @@ extra_environment = [
   { name = "DB_NAME", value = "karlo_business" },
   { name = "DB_SSLMODE", value = "require" },
   { name = "NOTIFY_TIMEOUT", value = "5s" },
+  # FMS's telemetry ingest, by its Cloud Map name now that FMS runs in this
+  # VPC (2026-09-15). The public https://fms-tracking.karlo.id still works
+  # but hairpins through the load balancer.
+  { name = "TELEMETRY_BASE_URL", value = "http://tracking.karlo.internal:5006" },
   # Cold storage: how long each aggregate stays in Postgres after its last
   # change before the nightly archiver moves it to Glacier (as Parquet).
   # Go durations; hours are the largest unit, so 365d = 8760h.
