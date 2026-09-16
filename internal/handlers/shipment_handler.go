@@ -82,15 +82,16 @@ func (h *ShipmentHandler) Advance(c *gin.Context) {
 // @Summary  Get an order's shipment
 // @Tags     Shipments
 // @Security BearerAuth
-// @Param    orderId path string true "Order ID"
+// @Param    id path string true "Order ID"
 // @Success  200 {object} models.Shipment
-// @Router   /orders/{orderId}/shipment [get]
+// @Router   /orders/{id}/shipment [get]
 func (h *ShipmentHandler) GetByOrder(c *gin.Context) {
 	actor, ok := callerActor(c)
 	if !ok {
 		return
 	}
-	orderID, ok := pathUUID(c, "orderId")
+	// The route is orders/:id/shipment — the same :id every other order route uses.
+	orderID, ok := pathUUID(c, "id")
 	if !ok {
 		return
 	}
