@@ -32,8 +32,11 @@ func NewOrderHandler(orders *services.OrderService) *OrderHandler {
 }
 
 type createOrderRequest struct {
-	AgreementID            string             `json:"agreementId"`
-	TransporterCompanyID   string             `json:"transporterCompanyId"`
+	AgreementID          string `json:"agreementId"`
+	TransporterCompanyID string `json:"transporterCompanyId"`
+	// A transporter entering the order for its customer names the customer
+	// here and is the transporter itself.
+	CustomerCompanyID      string             `json:"customerCompanyId"`
 	OrderKind              string             `json:"orderKind"`
 	OriginWarehouseID      string             `json:"originWarehouseId"`
 	DestinationWarehouseID string             `json:"destinationWarehouseId"`
@@ -95,6 +98,11 @@ func (h *OrderHandler) Create(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	// The wizard names the customer as a company; the field configuration's
+	// key is customerId. Same fold as agreements.
+	if req.CustomerCompanyID != "" {
+		present["customerId"] = true
+	}
 
 	items := make([]services.OrderItemInput, 0, len(req.Items))
 	for _, item := range req.Items {
@@ -127,6 +135,7 @@ func (h *OrderHandler) Create(c *gin.Context) {
 		PickupAt:               req.PickupAt,
 		DeliveryAt:             req.DeliveryAt,
 		CustomerID:             req.CustomerID,
+		CustomerCompanyID:      parseOptionalUUID(req.CustomerCompanyID),
 		ReferenceNumber:        req.ReferenceNumber,
 		Detail:                 req.Detail,
 		SubmitImmediately:      req.Submit,
@@ -621,4 +630,17 @@ func badQuery(c *gin.Context, p query.Params) bool {
 	}
 	response.BadRequest(c, p.Err.Error())
 	return true
+}
+
+// parseOptionalUUID returns nil for an empty or malformed id; callers that
+// need to reject a malformed one validate separately.
+func parseOptionalUUID(v string) *uuid.UUID {
+	if v == "" {
+		return nil
+	}
+	id, err := uuid.Parse(v)
+	if err != nil {
+		return nil
+	}
+	return &id
 }

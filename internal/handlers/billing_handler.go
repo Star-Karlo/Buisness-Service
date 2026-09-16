@@ -79,7 +79,10 @@ func foldRateKeys(present map[string]bool, rates []rateRequest) {
 }
 
 type createAgreementRequest struct {
-	TransporterCompanyID string            `json:"transporterCompanyId" binding:"required"`
+	// One of the two: a shipper names the transporter; a transporter names
+	// the customer (its shipper client) and is the transporter itself.
+	TransporterCompanyID string            `json:"transporterCompanyId"`
+	CustomerCompanyID    string            `json:"customerCompanyId"`
 	ValidFrom            time.Time         `json:"validFrom" binding:"required"`
 	ValidUntil           time.Time         `json:"validUntil" binding:"required"`
 	PaymentTypeID        string            `json:"paymentTypeId"`
@@ -111,9 +114,27 @@ func (h *BillingHandler) CreateAgreement(c *gin.Context) {
 		return
 	}
 
-	transporterID, err := uuid.Parse(req.TransporterCompanyID)
-	if err != nil {
-		response.BadRequest(c, "Invalid transporterCompanyId")
+	var transporterID uuid.UUID
+	var customerID *uuid.UUID
+	switch {
+	case req.CustomerCompanyID != "":
+		id, err := uuid.Parse(req.CustomerCompanyID)
+		if err != nil {
+			response.BadRequest(c, "Invalid customerCompanyId")
+			return
+		}
+		customerID = &id
+		transporterID = actor.CompanyID
+		present["customerId"] = true
+	case req.TransporterCompanyID != "":
+		id, err := uuid.Parse(req.TransporterCompanyID)
+		if err != nil {
+			response.BadRequest(c, "Invalid transporterCompanyId")
+			return
+		}
+		transporterID = id
+	default:
+		response.BadRequest(c, "transporterCompanyId or customerCompanyId is required")
 		return
 	}
 
@@ -136,6 +157,7 @@ func (h *BillingHandler) CreateAgreement(c *gin.Context) {
 	in := services.CreateAgreementInput{
 		Present:              present,
 		TransporterCompanyID: transporterID,
+		CustomerCompanyID:    customerID,
 		ValidFrom:            req.ValidFrom,
 		ValidUntil:           req.ValidUntil,
 		PaymentTypeID:        req.PaymentTypeID,

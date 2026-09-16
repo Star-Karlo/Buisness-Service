@@ -71,12 +71,19 @@ func NewBillingService(
 // CreateAgreementInput describes a new contract.
 type CreateAgreementInput struct {
 	TransporterCompanyID uuid.UUID
-	ValidFrom            time.Time
-	ValidUntil           time.Time
-	PaymentTypeID        string
-	CurrencyID           string
-	Detail               map[string]interface{}
-	Rates                []RateInput
+	// CustomerCompanyID is set when the TRANSPORTER records the agreement —
+	// the revamp's MyAgreement flow, where a transporter's planner enters
+	// the contract struck with one of its customers. The actor is then the
+	// transporter side and this is the shipper side; the agreement takes
+	// effect immediately, since the party that would approve it is the one
+	// entering it.
+	CustomerCompanyID *uuid.UUID
+	ValidFrom         time.Time
+	ValidUntil        time.Time
+	PaymentTypeID     string
+	CurrencyID        string
+	Detail            map[string]interface{}
+	Rates             []RateInput
 
 	// Customers are the clients this agreement covers.
 	//
@@ -130,7 +137,13 @@ func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in Cr
 	if in.ValidUntil.Before(in.ValidFrom) {
 		return nil, fmt.Errorf("%w: validUntil cannot be before validFrom", ErrValidation)
 	}
-	if in.TransporterCompanyID == actor.CompanyID {
+	shipperID, transporterID := actor.CompanyID, in.TransporterCompanyID
+	status := models.AgreementSubmitted
+	if in.CustomerCompanyID != nil {
+		shipperID, transporterID = *in.CustomerCompanyID, actor.CompanyID
+		status = models.AgreementActive
+	}
+	if transporterID == shipperID {
 		return nil, fmt.Errorf("%w: a company cannot contract with itself", ErrValidation)
 	}
 	if len(in.Rates) == 0 {
@@ -153,17 +166,17 @@ func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in Cr
 		}
 	}
 
-	number, err := s.agreementNumber(ctx, in.TransporterCompanyID, actor.CompanyID)
+	number, err := s.agreementNumber(ctx, transporterID, shipperID)
 	if err != nil {
 		return nil, err
 	}
 
 	agreement := &models.Agreement{
 		AgreementNumber:      number,
-		ShipperCompanyID:     actor.CompanyID,
-		TransporterCompanyID: in.TransporterCompanyID,
+		ShipperCompanyID:     shipperID,
+		TransporterCompanyID: transporterID,
 		CreatedByUserID:      actor.UserID,
-		StatusCode:           models.AgreementSubmitted,
+		StatusCode:           status,
 		ValidFrom:            in.ValidFrom,
 		ValidUntil:           in.ValidUntil,
 		Detail:               models.JSONB(in.Detail),
@@ -196,7 +209,7 @@ func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in Cr
 	// Who the agreement covers. The counterparty is always one of them —
 	// omitting it would make the ordinary single-client agreement cover nobody,
 	// and every lookup by customer would miss it.
-	covered := map[uuid.UUID]string{actor.CompanyID: ""}
+	covered := map[uuid.UUID]string{shipperID: ""}
 	for _, c := range in.Customers {
 		if c.CompanyID != uuid.Nil {
 			covered[c.CompanyID] = c.Label
@@ -220,9 +233,16 @@ func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in Cr
 	s.RouteLanes(ctx, agreement.ID)
 
 	s.notifier.Notify(ctx, clients.Event{
-		Type:           notificationv1.EventType_EVENT_TYPE_AGREEMENT_CREATED,
-		Subject:        clients.Subject{ID: agreement.ID.String(), Type: "agreement"},
-		Audience:       clients.ToCompanyRoles(in.TransporterCompanyID.String(), models.RoleTransporter, models.RoleManager),
+		Type:    notificationv1.EventType_EVENT_TYPE_AGREEMENT_CREATED,
+		Subject: clients.Subject{ID: agreement.ID.String(), Type: "agreement"},
+		// Tell the other side: the transporter when a shipper submitted, the
+		// customer when the transporter recorded it.
+		Audience: func() *notificationv1.Audience {
+			if in.CustomerCompanyID != nil {
+				return clients.ToCompanyRoles(shipperID.String(), models.RoleShipper, models.RoleManager)
+			}
+			return clients.ToCompanyRoles(transporterID.String(), models.RoleTransporter, models.RoleManager)
+		}(),
 		ActorID:        actor.UserID.String(),
 		IdempotencyKey: "agreement-created:" + agreement.ID.String(),
 		Params:         map[string]interface{}{"agreementNumber": agreement.AgreementNumber},

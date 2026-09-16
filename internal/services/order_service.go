@@ -122,6 +122,13 @@ type CreateOrderInput struct {
 	// SubmitImmediately skips the draft state for clients that have no draft UI.
 	SubmitImmediately bool
 
+	// CustomerCompanyID is set when the TRANSPORTER enters the order for one
+	// of its customers — the revamp's Input Order wizard. The actor is then
+	// the transporter and this is the shipper; the order is born approved,
+	// ready for a truck, because the party that would approve it is the one
+	// typing it in.
+	CustomerCompanyID *uuid.UUID
+
 	// Items is the itemised cargo, for the companies whose configuration
 	// enables it. Empty for those that name a category and stop.
 	Items []OrderItemInput
@@ -151,14 +158,30 @@ func (s *OrderService) Create(ctx context.Context, actor Actor, in CreateOrderIn
 		return nil, err
 	}
 
-	number, err := s.nextOrderNumber(ctx)
-	if err != nil {
-		return nil, err
-	}
-
+	shipperID, transporterID := actor.CompanyID, in.TransporterCompanyID
 	status := models.OrderDraft
 	if in.SubmitImmediately {
 		status = models.OrderSubmitted
+	}
+	var number string
+	if in.CustomerCompanyID != nil {
+		shipperID = *in.CustomerCompanyID
+		transporterID = &actor.CompanyID
+		status = models.OrderApproved
+		// The wizard's own id: ORM + yymmddHHMMSS, "-n" per shipment of a
+		// batch. Time-based, so two planners in the same second could
+		// collide; the sequence suffix below keeps it unique without making
+		// the number unreadable.
+		number = fmt.Sprintf("ORM%s", time.Now().Format("060102150405"))
+		if seq, err := s.orders.NextNumber(ctx, "orm", time.Now().Format("060102150405")); err == nil && seq > 1 {
+			number = fmt.Sprintf("%s-%d", number, seq)
+		}
+	} else {
+		n, err := s.nextOrderNumber(ctx)
+		if err != nil {
+			return nil, err
+		}
+		number = n
 	}
 
 	kind := in.OrderKind
@@ -169,8 +192,8 @@ func (s *OrderService) Create(ctx context.Context, actor Actor, in CreateOrderIn
 	order := &models.Order{
 		OrderNumber:          number,
 		AgreementID:          in.AgreementID,
-		ShipperCompanyID:     actor.CompanyID,
-		TransporterCompanyID: in.TransporterCompanyID,
+		ShipperCompanyID:     shipperID,
+		TransporterCompanyID: transporterID,
 		CreatedByUserID:      actor.UserID,
 		OrderKind:            kind,
 		StatusCode:           status,
