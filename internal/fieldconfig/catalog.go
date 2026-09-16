@@ -147,7 +147,9 @@ var agreementFields = []Field{
 		Label: "Truck type matrix",
 		Help:  "Enable to agree specific body-and-size combinations rather than a single truck type.", Sort: 95},
 
-	{Key: "cargoTypeId", DataType: TypeRef, Default: Required, Group: "Cargo", Label: "Cargo type", Sort: 100},
+	// Optional, as in the revamp's agreement form: a contract may price a
+	// lane before the cargo on it is known. The order names the cargo.
+	{Key: "cargoTypeId", DataType: TypeRef, Default: Optional, Group: "Cargo", Label: "Cargo type", Sort: 100},
 	{Key: "cargoItemIds", DataType: TypeList, Default: Optional, Group: "Cargo", Label: "Cargo items", Sort: 110},
 
 	{Key: "pricingTypeId", DataType: TypeRef, Default: Required, Group: "Commercial", Label: "Pricing type", Sort: 120},
@@ -176,7 +178,9 @@ var orderFields = []Field{
 	{Key: "pickupAt", DataType: TypeDateTime, Default: Required, Group: "Schedule", Label: "Estimated loading time", Sort: 50},
 	{Key: "expiresAt", DataType: TypeDateTime, Default: Optional, Group: "Schedule", Label: "Order expiry", Sort: 60},
 
-	{Key: "cargoTypeId", DataType: TypeRef, Default: Required, Group: "Cargo", Label: "Cargo type", Sort: 70},
+	// Optional: the revamp's Input Order wizard takes the cargo from the
+	// agreement's item (detail.muatan) rather than asking again.
+	{Key: "cargoTypeId", DataType: TypeRef, Default: Optional, Group: "Cargo", Label: "Cargo type", Sort: 70},
 
 	// The itemisation switch. A company that ships bulk chemicals names the
 	// category and stops; a company shipping mixed cartons needs every line.
