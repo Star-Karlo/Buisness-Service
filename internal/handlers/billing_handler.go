@@ -63,6 +63,7 @@ func foldRateKeys(present map[string]bool, rates []rateRequest) {
 		}
 	}
 	for _, r := range rates {
+		mark("customerId", r.CustomerCompanyID != "")
 		mark("route.originCityId", r.OriginCityID != "")
 		mark("route.destinationCityId", r.DestinationCityID != "")
 		mark("route.originDistrictId", r.OriginDistrictID != "")
@@ -122,6 +123,15 @@ func (h *BillingHandler) CreateAgreement(c *gin.Context) {
 	// a field counts as supplied when any rate supplies it, which is the same
 	// question the form is asking — "is this input in use".
 	foldRateKeys(present, req.Rates)
+	// The form asks for a customer once per lane and derives the covered
+	// list from it, so the request carries `customers` and per-rate
+	// `customerCompanyId`, never a top-level `customerId`. The field
+	// configuration's key is `customerId`; fold the two spellings onto it,
+	// or a required customer can never be satisfied by the form that
+	// collects it.
+	if len(req.Customers) > 0 {
+		present["customerId"] = true
+	}
 
 	in := services.CreateAgreementInput{
 		Present:              present,

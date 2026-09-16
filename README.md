@@ -118,6 +118,8 @@ internal/
   models/             domain types
   repository/         the only code that talks to the database
   services/           business rules, incl. the geofence watcher that polls FMS positions
+                      (TELEMETRY_BASE_URL — http://tracking.karlo.internal:5006 in prod,
+                      FMS's ingest in the same VPC since 2026-09-15)
   storage/            S3: presigned uploads, and the Deep Archive put/get the archiver uses
   telemetry/          FMS tracking client (positions by IMEI)
   routing/            MAPID client behind the Postgres route cache
