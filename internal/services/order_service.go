@@ -378,6 +378,18 @@ func (s *OrderService) applyAgreementPrice(ctx context.Context, actor Actor, ord
 	}
 
 	rate, err := s.agreements.FindRate(ctx, agreement.ID, lane)
+	if err != nil && errors.Is(err, repository.ErrNotFound) {
+		// Before refusing, two matches the city lookup cannot make:
+		//   - a rate written against the same warehouses the order names,
+		//     which is more specific than any city and needs no master-data
+		//     city id on the warehouse;
+		//   - an agreement with exactly one rate — the revamp's MyAgreement,
+		//     which prices one tarif per contract and names its route as
+		//     text. That rate IS the contract's price.
+		if r := rateByWarehouseOrOnlyRate(agreement, order); r != nil {
+			rate, err = r, nil
+		}
+	}
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			// The agreement exists but does not cover this lane. Refused,
@@ -1041,4 +1053,19 @@ func (s *OrderService) PatchDetail(ctx context.Context, actor Actor, id uuid.UUI
 	}
 	order.Detail = models.JSONB(detail)
 	return order, nil
+}
+
+func rateByWarehouseOrOnlyRate(agreement *models.Agreement, order *models.Order) *models.AgreementRate {
+	for i := range agreement.Rates {
+		r := &agreement.Rates[i]
+		if r.OriginWarehouseID != nil && r.DestinationWarehouseID != nil &&
+			order.OriginWarehouseID != nil && order.DestinationWarehouseID != nil &&
+			*r.OriginWarehouseID == *order.OriginWarehouseID && *r.DestinationWarehouseID == *order.DestinationWarehouseID {
+			return r
+		}
+	}
+	if len(agreement.Rates) == 1 {
+		return &agreement.Rates[0]
+	}
+	return nil
 }
