@@ -207,7 +207,7 @@ func (h *OrderHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -234,7 +234,7 @@ func (h *OrderHandler) UpdateDraft(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -270,7 +270,7 @@ func (h *OrderHandler) Transition(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -310,7 +310,7 @@ func (h *OrderHandler) AssignDriver(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -355,7 +355,7 @@ func (h *OrderHandler) History(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -383,7 +383,7 @@ func (h *OrderHandler) NextStates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -569,10 +569,13 @@ func allowStatusChange(c *gin.Context, to string, lookup func(string) (string, b
 	return true
 }
 
-func pathUUID(c *gin.Context, name string) (uuid.UUID, bool) {
-	id, err := uuid.Parse(c.Param(name))
+// pathUUID reads the :id every resource route is declared with. One name
+// on purpose: the shipment lookup once asked for a differently named
+// parameter and answered 400 to every call.
+func pathUUID(c *gin.Context) (uuid.UUID, bool) {
+	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "Invalid "+name)
+		response.BadRequest(c, "Invalid id")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -666,7 +669,7 @@ func (h *OrderHandler) PatchDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}

@@ -251,7 +251,7 @@ func (h *BillingHandler) GetAgreement(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -278,7 +278,7 @@ func (h *BillingHandler) DecideAgreement(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -312,7 +312,7 @@ func (h *BillingHandler) VerifyAgreement(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -425,7 +425,7 @@ func (h *BillingHandler) GetInvoice(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -456,7 +456,7 @@ func (h *BillingHandler) TransitionInvoice(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}

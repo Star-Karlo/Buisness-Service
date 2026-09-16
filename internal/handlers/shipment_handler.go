@@ -44,7 +44,7 @@ func (h *ShipmentHandler) Advance(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -90,8 +90,7 @@ func (h *ShipmentHandler) GetByOrder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// The route is orders/:id/shipment — the same :id every other order route uses.
-	orderID, ok := pathUUID(c, "id")
+	orderID, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -118,7 +117,7 @@ func (h *ShipmentHandler) NextStates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -173,7 +172,7 @@ func (h *ShipmentHandler) AttachDocument(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
@@ -218,7 +217,7 @@ func (h *ShipmentHandler) Documents(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, ok := pathUUID(c, "id")
+	id, ok := pathUUID(c)
 	if !ok {
 		return
 	}
