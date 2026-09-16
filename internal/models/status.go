@@ -2,6 +2,8 @@
 // them.
 package models
 
+import "strings"
+
 // Order statuses, in lifecycle order.
 //
 // The legacy system stored three parallel strings on every order: statusCode
@@ -115,6 +117,20 @@ type Transition struct {
 // orderTransitions is the complete order state machine. A move that is not
 // listed here cannot happen, which is the property the monolith lacked: there,
 // any caller could PUT any status onto any order.
+// NormaliseRole maps a token's role onto the machines' vocabulary. The token
+// carries the tenant's own role NAME — "Driver", "Administrator", "Owner" —
+// and only the ones that spell a persona differently in case ("Driver") are
+// personas at all. Anything else is returned untouched; the services then
+// resolve it from which side of the order the caller stands on.
+func NormaliseRole(role string) string {
+	for _, known := range []string{RoleSuperadmin, RoleAdmin, RoleShipper, RoleTransporter, RoleDriver, RoleManager, RoleWarehousePic} {
+		if strings.EqualFold(role, known) {
+			return known
+		}
+	}
+	return role
+}
+
 var orderTransitions = map[string][]Transition{
 	OrderDraft: {
 		{To: OrderSubmitted, AllowedRoles: []string{RoleShipper, RoleAdmin, RoleSuperadmin}},

@@ -470,10 +470,19 @@ func callerActor(c *gin.Context) (services.Actor, bool) {
 		return services.Actor{}, false
 	}
 
+	// The machines and the authority checks speak personas (shipper,
+	// transporter, driver, admin); the token speaks the tenant's role name.
+	// Platform staff are the machines' admin — the comment on canTransition
+	// says why they may take any listed step — and nobody else is: a tenant's
+	// own "Administrator" is still only their company's side of an order.
+	role := models.NormaliseRole(principal.Role())
+	if principal.IsPlatformStaff {
+		role = models.RoleAdmin
+	}
 	actor := services.Actor{
 		UserID:        userID,
 		CompanyID:     companyID,
-		Role:          principal.Role(),
+		Role:          role,
 		PlatformStaff: principal.IsPlatformStaff,
 	}
 

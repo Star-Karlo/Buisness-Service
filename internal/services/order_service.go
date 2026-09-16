@@ -637,7 +637,7 @@ func (s *OrderService) Transition(ctx context.Context, actor Actor, id uuid.UUID
 		return nil, err
 	}
 
-	if err := models.CanTransitionOrder(order.StatusCode, to, actor.Role); err != nil {
+	if err := models.CanTransitionOrder(order.StatusCode, to, machineRole(actor, order)); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrTransition, err)
 	}
 
@@ -676,6 +676,27 @@ func (s *OrderService) Transition(ctx context.Context, actor Actor, id uuid.UUID
 	order.Status = models.StatusLabel(models.DomainOrder, to)
 	order.StatusAlias = models.StatusAlias(models.DomainOrder, to)
 	return order, nil
+}
+
+// machineRole is the role the state machines are asked about. Personas the
+// token can carry on its own (admin, driver, warehouse PIC, manager) stand;
+// for everyone else the persona is which side of the order their company is
+// on — a fact about the order, not the token, which only knows the tenant's
+// role name.
+func machineRole(actor Actor, order *models.Order) string {
+	switch actor.Role {
+	case models.RoleAdmin, models.RoleSuperadmin, models.RoleDriver, models.RoleWarehousePic, models.RoleManager:
+		return actor.Role
+	}
+	if order != nil {
+		if order.TransporterCompanyID != nil && *order.TransporterCompanyID == actor.CompanyID {
+			return models.RoleTransporter
+		}
+		if order.ShipperCompanyID == actor.CompanyID {
+			return models.RoleShipper
+		}
+	}
+	return actor.Role
 }
 
 // assertTransitionAuthority applies the rules the state machine cannot express,
@@ -774,7 +795,7 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID uu
 		}
 	}
 
-	if err := models.CanTransitionOrder(order.StatusCode, models.OrderAssigned, actor.Role); err != nil {
+	if err := models.CanTransitionOrder(order.StatusCode, models.OrderAssigned, machineRole(actor, order)); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrTransition, err)
 	}
 

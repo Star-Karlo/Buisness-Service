@@ -86,7 +86,7 @@ func (s *ShipmentService) Advance(ctx context.Context, actor Actor, in AdvanceIn
 		return nil, err
 	}
 
-	if err := models.CanTransitionShipment(shipment.StatusCode, in.To, actor.Role); err != nil {
+	if err := models.CanTransitionShipment(shipment.StatusCode, in.To, machineRole(actor, order)); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrTransition, err)
 	}
 
@@ -238,7 +238,7 @@ func (s *ShipmentService) syncOrderStatus(ctx context.Context, actor Actor, orde
 
 	// The order machine drives these moves with no role attached, because it is
 	// the shipment that caused them rather than a person.
-	if err := models.CanTransitionOrder(order.StatusCode, target, actor.Role); err != nil {
+	if err := models.CanTransitionOrder(order.StatusCode, target, machineRole(actor, order)); err != nil {
 		// The shipment advanced but the order cannot follow. Report it rather
 		// than leaving the two silently inconsistent.
 		return fmt.Errorf("%w: shipment moved to %s but the order cannot move to %s: %v",
