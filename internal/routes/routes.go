@@ -120,6 +120,8 @@ func Setup(d Deps) *gin.Engine {
 	orders.GET("/:id/candidates", authctx.RequireModule("dispatch.read"), d.Dispatch.Candidates)
 	// The pairing screen's suggestions: trip history per (driver, truck).
 	api.GET("/fleet/driver-activity", authctx.RequireModule("dispatch.read"), d.Dispatch.DriverActivity)
+	// The planner's map: every truck with a known position.
+	api.GET("/fleet/live", authctx.RequireModule("dispatch.read"), d.Dispatch.FleetLive)
 	orders.GET("/:id/routes", authctx.RequireModule("dispatch.read"), d.Dispatch.Routes)
 
 	// Re-planning is the paid feature. The permission gate here is only half

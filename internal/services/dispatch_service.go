@@ -432,6 +432,52 @@ func (s *DispatchService) Warehouse(ctx context.Context, id string) (*masterdata
 	return s.masterdata.GetWarehouse(ctx, id)
 }
 
+// FleetPosition is one truck on the planner's map.
+type FleetPosition struct {
+	TruckID      string         `json:"truckId"`
+	PoliceNumber string         `json:"policeNumber"`
+	Status       string         `json:"status"`
+	IsAvailable  bool           `json:"isAvailable"`
+	IMEI         string         `json:"imei,omitempty"`
+	Lat          float64        `json:"lat"`
+	Lon          float64        `json:"lon"`
+	At           time.Time      `json:"at"`
+	Source       PositionSource `json:"source"`
+	City         string         `json:"city,omitempty"`
+}
+
+// FleetPositions is where every truck in the company's fleet is right now,
+// live from telemetry where the truck has a device that has reported, and
+// otherwise the last unloading point it was seen at. Trucks with neither are
+// left out: the map shows what is known, not a guess at the depot.
+func (s *DispatchService) FleetPositions(ctx context.Context, actor Actor) ([]FleetPosition, error) {
+	trucks, err := s.masterdata.ListTrucks(ctx, actor.CompanyID.String())
+	if err != nil {
+		return nil, err
+	}
+	positions := s.positionsFor(ctx, trucks)
+	out := make([]FleetPosition, 0, len(positions))
+	for _, t := range trucks {
+		p, ok := positions[t.GetId()]
+		if !ok {
+			continue
+		}
+		out = append(out, FleetPosition{
+			TruckID:      t.GetId(),
+			PoliceNumber: t.GetPoliceNumber(),
+			Status:       t.GetStatus(),
+			IsAvailable:  t.GetIsAvailable(),
+			IMEI:         t.GetImei(),
+			Lat:          p.Lat,
+			Lon:          p.Lon,
+			At:           p.At,
+			Source:       p.Source,
+			City:         p.City,
+		})
+	}
+	return out, nil
+}
+
 // DriverActivity is the pairing screen's memory: which drivers have driven
 // which of the company's trucks, how often, and when they were last on a
 // job. Master-data knows the current pairing; only the order history knows

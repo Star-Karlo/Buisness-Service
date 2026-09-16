@@ -290,6 +290,22 @@ func (a *Auth) CompanyNames(ctx context.Context, ids []string) map[string]string
 	return out
 }
 
+// ListTrucks is the whole fleet, available or not: the planner's map draws
+// every truck the company has, not only the ones it could assign right now.
+// Same cap as ListAvailableTrucks, for the same reason.
+func (m *MasterData) ListTrucks(ctx context.Context, companyID string) ([]*masterdatav1.Truck, error) {
+	const maxFleet = 500
+
+	resp, err := m.client.ListTrucks(ctx, &masterdatav1.ListTrucksRequest{
+		CompanyId: companyID,
+		Query:     &commonv1.Query{Page: &commonv1.Page{Page: 1, PageSize: maxFleet}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("clients: list trucks: %w", err)
+	}
+	return resp.GetTrucks(), nil
+}
+
 // ListAvailableTrucks returns the company's trucks that are free to take work.
 //
 // Availability is filtered at master data rather than here: the fleet is that

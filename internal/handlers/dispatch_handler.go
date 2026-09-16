@@ -503,3 +503,23 @@ func (h *DispatchHandler) DriverActivity(c *gin.Context) {
 	}
 	response.OK(c, rows)
 }
+
+// FleetLive lists where the company's trucks are, for the planner's map.
+//
+// @Summary  Live fleet positions
+// @Tags     Dispatch
+// @Security BearerAuth
+// @Success  200 {array} services.FleetPosition
+// @Router   /fleet/live [get]
+func (h *DispatchHandler) FleetLive(c *gin.Context) {
+	actor, ok := callerActor(c)
+	if !ok {
+		return
+	}
+	rows, err := h.dispatch.FleetPositions(c.Request.Context(), actor)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.OK(c, rows)
+}
