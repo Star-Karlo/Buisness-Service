@@ -291,6 +291,14 @@ type Order struct {
 	OriginWarehouseName      string `gorm:"-" json:"originWarehouseName,omitempty"`
 	DestinationWarehouseName string `gorm:"-" json:"destinationWarehouseName,omitempty"`
 	TruckPoliceNumber        string `gorm:"-" json:"truckPoliceNumber,omitempty"`
+	TruckTypeName            string `gorm:"-" json:"truckTypeName,omitempty"`
+	DriverName               string `gorm:"-" json:"driverName,omitempty"`
+	ShipperCompanyName       string `gorm:"-" json:"shipperCompanyName,omitempty"`
+	TransporterCompanyName   string `gorm:"-" json:"transporterCompanyName,omitempty"`
+	// ShipmentStatusCode is the current shipment's state, resolved on read.
+	// The console derives its one displayed status from the order's own
+	// state plus this, so a list needs it without a call per row.
+	ShipmentStatusCode string `gorm:"-" json:"shipmentStatusCode,omitempty"`
 
 	CargoTypeID *string `gorm:"column:cargo_type_id" json:"cargoTypeId,omitempty"`
 	ItemTypeID  *string `gorm:"column:item_type_id" json:"itemTypeId,omitempty"`

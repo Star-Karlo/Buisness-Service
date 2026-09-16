@@ -100,6 +100,7 @@ func Setup(d Deps) *gin.Engine {
 	orders.POST("", authctx.RequireModule("order.create"), d.Order.Create)
 	orders.GET("/:id", authctx.RequireModule("order.read"), d.Order.Get)
 	orders.PUT("/:id", authctx.RequireModule("order.update"), d.Order.UpdateDraft)
+	orders.PATCH("/:id/detail", authctx.RequireModule("order.update"), d.Order.PatchDetail)
 	orders.GET("/:id/history", authctx.RequireModule("order.read"), d.Order.History)
 	orders.GET("/:id/transitions", authctx.RequireModule("order.read"), d.Order.NextStates)
 	orders.PUT("/:id/status", d.Order.Transition)

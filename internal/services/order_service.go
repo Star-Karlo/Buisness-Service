@@ -541,7 +541,59 @@ func (s *OrderService) resolveNames(ctx context.Context, orders []models.Order) 
 		trucks[id] = t.GetPoliceNumber()
 	}
 
+	// Companies, drivers and shipments: one lookup per distinct id, not per
+	// row. The list page shows shipper, driver and a status derived from the
+	// shipment; without these it would show UUIDs or make a call per row.
+	companyIDs := make([]string, 0, len(orders)*2)
+	drivers := map[string]string{}
 	for i := range orders {
+		companyIDs = append(companyIDs, orders[i].ShipperCompanyID.String())
+		if orders[i].TransporterCompanyID != nil {
+			companyIDs = append(companyIDs, orders[i].TransporterCompanyID.String())
+		}
+		if orders[i].DriverID != nil && *orders[i].DriverID != "" {
+			drivers[*orders[i].DriverID] = ""
+		}
+	}
+	profiles := map[string]clients.CompanyProfile{}
+	if s.auth != nil {
+		profiles = s.auth.CompanyProfiles(ctx, companyIDs)
+	}
+	for id := range drivers {
+		d, err := s.masterdata.GetDriver(ctx, id)
+		if err != nil {
+			continue
+		}
+		drivers[id] = d.GetFullName()
+	}
+	truckTypes := map[string]string{}
+	for id := range trucks {
+		t, err := s.masterdata.GetTruck(ctx, id)
+		if err == nil {
+			truckTypes[id] = t.GetTruckTypeId()
+		}
+	}
+
+	for i := range orders {
+		if p, ok := profiles[orders[i].ShipperCompanyID.String()]; ok {
+			orders[i].ShipperCompanyName = p.Name
+		}
+		if t := orders[i].TransporterCompanyID; t != nil {
+			if p, ok := profiles[t.String()]; ok {
+				orders[i].TransporterCompanyName = p.Name
+			}
+		}
+		if id := orders[i].DriverID; id != nil {
+			orders[i].DriverName = drivers[*id]
+		}
+		if id := orders[i].TruckID; id != nil {
+			orders[i].TruckTypeName = truckTypes[*id]
+		}
+		if s.shipments != nil {
+			if sh, err := s.shipments.FindByOrder(ctx, orders[i].ID); err == nil && sh != nil {
+				orders[i].ShipmentStatusCode = sh.StatusCode
+			}
+		}
 		if id := orders[i].OriginWarehouseID; id != nil {
 			orders[i].OriginWarehouseName = warehouses[*id]
 		}
@@ -961,4 +1013,32 @@ func setIfNotEmpty(target **string, value string) {
 		v := value
 		*target = &v
 	}
+}
+
+// PatchDetail merges keys into an order's detail, for the working data the
+// console keeps on an order that has no column of its own — POD review
+// figures, invoice adjustments, post-trip reconciliation. Keys are replaced
+// wholesale (a nested object is a unit), and a null removes a key. Either
+// party to the order may write; the detail is shared working state.
+func (s *OrderService) PatchDetail(ctx context.Context, actor Actor, id uuid.UUID, patch map[string]interface{}) (*models.Order, error) {
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, id)
+	if err != nil {
+		return nil, err
+	}
+	detail := map[string]interface{}(order.Detail)
+	if detail == nil {
+		detail = map[string]interface{}{}
+	}
+	for k, v := range patch {
+		if v == nil {
+			delete(detail, k)
+			continue
+		}
+		detail[k] = v
+	}
+	if err := s.orders.UpdateFields(ctx, id, map[string]interface{}{"detail": models.JSONB(detail)}); err != nil {
+		return nil, err
+	}
+	order.Detail = models.JSONB(detail)
+	return order, nil
 }

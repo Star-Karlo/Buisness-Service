@@ -644,3 +644,32 @@ func parseOptionalUUID(v string) *uuid.UUID {
 	}
 	return &id
 }
+
+// PatchDetail merges working data into an order's detail.
+//
+// @Summary  Patch order detail
+// @Tags     Orders
+// @Security BearerAuth
+// @Param    id path string true "Order ID"
+// @Router   /orders/{id}/detail [patch]
+func (h *OrderHandler) PatchDetail(c *gin.Context) {
+	actor, ok := callerActor(c)
+	if !ok {
+		return
+	}
+	id, ok := pathUUID(c, "id")
+	if !ok {
+		return
+	}
+	var patch map[string]interface{}
+	if err := c.ShouldBindJSON(&patch); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	order, err := h.orders.PatchDetail(c.Request.Context(), actor, id, patch)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.OK(c, order)
+}
