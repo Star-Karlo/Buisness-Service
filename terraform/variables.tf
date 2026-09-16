@@ -137,6 +137,8 @@ variable "path_patterns" {
     # configurator 404'd in the browser while working against the service
     # directly — exactly the split failure the note above warns about.
     "/api/v1/config*",
+    # Fleet pairing suggestions (driver activity per truck).
+    "/api/v1/fleet*",
   ]
 }
 

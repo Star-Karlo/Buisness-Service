@@ -482,3 +482,24 @@ func maskNumber(number string) string {
 	}
 	return "••••••" + number[len(number)-4:]
 }
+
+// DriverActivity lists (driver, truck) trip counts and last activity for the
+// caller's company, for the fleet pairing screen's suggestions.
+//
+// @Summary  Driver activity per truck
+// @Tags     Dispatch
+// @Security BearerAuth
+// @Success  200 {object} response.Envelope
+// @Router   /fleet/driver-activity [get]
+func (h *DispatchHandler) DriverActivity(c *gin.Context) {
+	actor, ok := callerActor(c)
+	if !ok {
+		return
+	}
+	rows, err := h.dispatch.DriverActivity(c.Request.Context(), actor)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.OK(c, rows)
+}

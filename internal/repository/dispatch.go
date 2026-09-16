@@ -420,3 +420,28 @@ func (r *OrderRouteRepository) LastKnownPositions(ctx context.Context, truckIDs 
 	}
 	return out, nil
 }
+
+// DriverActivity is one driver's history with a company's trucks, for the
+// pairing screen's suggestions: who has driven this truck most, who has been
+// idle longest.
+type DriverActivity struct {
+	DriverID     string     `json:"driverId"`
+	TruckID      string     `json:"truckId"`
+	Trips        int        `json:"trips"`
+	LastActiveAt *time.Time `json:"lastActiveAt,omitempty"`
+}
+
+// DriverActivity aggregates shipments by (driver, truck) for orders the
+// company carried. Drivers are master-data ids; the caller joins names.
+func (r *OrderRouteRepository) DriverActivity(ctx context.Context, transporterID uuid.UUID) ([]DriverActivity, error) {
+	var out []DriverActivity
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT s.driver_id, s.truck_id, COUNT(*) AS trips, MAX(s.created_at) AS last_active_at
+		FROM shipments s
+		JOIN orders o ON o.id = s.order_id
+		WHERE o.transporter_company_id = ?
+		  AND s.driver_id IS NOT NULL AND s.truck_id IS NOT NULL
+		  AND s.status_code <> 'cancelled'
+		GROUP BY s.driver_id, s.truck_id`, transporterID).Scan(&out).Error
+	return out, err
+}

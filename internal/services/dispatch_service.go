@@ -431,3 +431,11 @@ func (s *DispatchService) warehousePoint(ctx context.Context, id string) (routin
 func (s *DispatchService) Warehouse(ctx context.Context, id string) (*masterdatav1.Warehouse, error) {
 	return s.masterdata.GetWarehouse(ctx, id)
 }
+
+// DriverActivity is the pairing screen's memory: which drivers have driven
+// which of the company's trucks, how often, and when they were last on a
+// job. Master-data knows the current pairing; only the order history knows
+// the habit.
+func (s *DispatchService) DriverActivity(ctx context.Context, actor Actor) ([]repository.DriverActivity, error) {
+	return s.routes.DriverActivity(ctx, actor.CompanyID)
+}
