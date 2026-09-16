@@ -144,6 +144,7 @@ func run() error {
 	orderRouteRepo := repository.NewOrderRouteRepository(db)
 	allowanceRepo := repository.NewAllowanceRepository(db)
 	handoverRepo := repository.NewHandoverRepository(db)
+	ledgerRepo := repository.NewLedgerRepository(db)
 
 	// Publish the configurable-field catalogue the code declares.
 	//
@@ -250,6 +251,7 @@ func run() error {
 		FieldConfig: handlers.NewFieldConfigHandler(fieldConfigService),
 		Allowance:   handlers.NewAllowanceHandler(allowanceService),
 		Handover:    handlers.NewHandoverHandler(handoverService),
+		Ledger:      handlers.NewLedgerHandler(ledgerRepo),
 	})
 
 	httpSrv := &http.Server{

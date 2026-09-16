@@ -139,6 +139,8 @@ variable "path_patterns" {
     "/api/v1/config*",
     # Fleet pairing suggestions (driver activity per truck).
     "/api/v1/fleet*",
+    # The console's Finance pages: chart of accounts and manual journal lines.
+    "/api/v1/ledger*",
   ]
 }
 

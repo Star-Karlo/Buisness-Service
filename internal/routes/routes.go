@@ -42,6 +42,7 @@ type Deps struct {
 	FieldConfig *handlers.FieldConfigHandler
 	Upload      *handlers.UploadHandler
 	Allowance   *handlers.AllowanceHandler
+	Ledger      *handlers.LedgerHandler
 	Handover    *handlers.HandoverHandler
 }
 
@@ -159,6 +160,18 @@ func Setup(d Deps) *gin.Engine {
 	// every driver sub-account enumerated it.
 	shipments.POST("/:id/handover", d.Handover.Issue)
 	shipments.POST("/:id/handover/verify", d.Handover.Verify)
+
+	// The console's Finance pages. Reading the books is the invoice reader's
+	// right; writing an account or a manual line is the invoice creator's.
+	ledger := api.Group("/ledger")
+	ledger.GET("/accounts", authctx.RequireModule("invoice.read"), d.Ledger.ListAccounts)
+	ledger.POST("/accounts", authctx.RequireModule("invoice.create"), d.Ledger.CreateAccount)
+	ledger.PUT("/accounts/:id", authctx.RequireModule("invoice.create"), d.Ledger.UpdateAccount)
+	ledger.DELETE("/accounts/:id", authctx.RequireModule("invoice.create"), d.Ledger.DeleteAccount)
+	ledger.GET("/entries", authctx.RequireModule("invoice.read"), d.Ledger.ListEntries)
+	ledger.POST("/entries", authctx.RequireModule("invoice.create"), d.Ledger.CreateEntry)
+	ledger.PUT("/entries/:id", authctx.RequireModule("invoice.create"), d.Ledger.UpdateEntry)
+	ledger.DELETE("/entries/:id", authctx.RequireModule("invoice.create"), d.Ledger.DeleteEntry)
 
 	// Agreements.
 	agreements := api.Group("/agreements")
