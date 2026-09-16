@@ -127,6 +127,9 @@ var orderTransitions = map[string][]Transition{
 	},
 	OrderApproved: {
 		{To: OrderReadyToPlan, AllowedRoles: []string{RoleTransporter, RoleManager, RoleAdmin, RoleSuperadmin}},
+		// The console's "Penugasan Pengemudi" tab assigns straight from
+		// approved; readyToPlan stays as an optional explicit planning step.
+		{To: OrderAssigned, AllowedRoles: []string{RoleTransporter, RoleManager, RoleAdmin, RoleSuperadmin}},
 		{To: OrderCancelRequested, AllowedRoles: []string{RoleShipper}},
 		{To: OrderCancelled, AllowedRoles: []string{RoleAdmin, RoleSuperadmin}},
 	},
