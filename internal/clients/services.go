@@ -301,7 +301,7 @@ func (m *MasterData) ListTrucks(ctx context.Context, companyID string) ([]*maste
 		// Master data's pages are zero-based. Page 1 was the second page, which
 		// for every real fleet is empty — so the planner had no trucks to rank
 		// and no IMEI to ask telemetry about, and nothing said why.
-		Query:     &commonv1.Query{Page: &commonv1.Page{Page: 0, PageSize: maxFleet}},
+		Query: &commonv1.Query{Page: &commonv1.Page{Page: 0, PageSize: maxFleet}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("clients: list trucks: %w", err)
