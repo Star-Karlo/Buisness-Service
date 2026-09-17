@@ -298,7 +298,10 @@ func (m *MasterData) ListTrucks(ctx context.Context, companyID string) ([]*maste
 
 	resp, err := m.client.ListTrucks(ctx, &masterdatav1.ListTrucksRequest{
 		CompanyId: companyID,
-		Query:     &commonv1.Query{Page: &commonv1.Page{Page: 1, PageSize: maxFleet}},
+		// Master data's pages are zero-based. Page 1 was the second page, which
+		// for every real fleet is empty — so the planner had no trucks to rank
+		// and no IMEI to ask telemetry about, and nothing said why.
+		Query:     &commonv1.Query{Page: &commonv1.Page{Page: 0, PageSize: maxFleet}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("clients: list trucks: %w", err)
@@ -323,7 +326,7 @@ func (m *MasterData) ListAvailableTrucks(ctx context.Context, companyID string) 
 	resp, err := m.client.ListTrucks(ctx, &masterdatav1.ListTrucksRequest{
 		CompanyId: companyID,
 		Query: &commonv1.Query{
-			Page: &commonv1.Page{Page: 1, PageSize: maxCandidates},
+			Page: &commonv1.Page{Page: 0, PageSize: maxCandidates},
 			Filtered: []*commonv1.Filter{
 				{Id: "isAvailable", Value: "true", Operator: commonv1.Operator_OPERATOR_EQ},
 			},
