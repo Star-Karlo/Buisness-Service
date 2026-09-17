@@ -35,7 +35,7 @@ func fixtureServer(t *testing.T, body string) *Client {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return New(srv.URL, "")
+	return New(srv.URL, "", "")
 }
 
 func TestLiveDropsTheNullIslandPlaceholder(t *testing.T) {
@@ -106,7 +106,7 @@ func TestAgeReportsStaleness(t *testing.T) {
 // An unconfigured client must fail cleanly rather than sending requests to an
 // empty host, so telemetry stays optional.
 func TestUnconfiguredClientRefusesRatherThanDialling(t *testing.T) {
-	c := New("", "")
+	c := New("", "", "")
 	if c.Configured() {
 		t.Fatal("a client with no base URL should not report itself configured")
 	}
@@ -123,7 +123,7 @@ func TestEmptyRequestSkipsTheCallEntirely(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := New(srv.URL, "").Live(context.Background(), nil)
+	got, err := New(srv.URL, "", "").Live(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Live: %v", err)
 	}
@@ -143,8 +143,32 @@ func TestIngestKeyIsSentWhenConfigured(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _ = New(srv.URL, "secret").Live(context.Background(), []string{"1"})
+	_, _ = New(srv.URL, "", "secret").Live(context.Background(), []string{"1"})
 	if seen != "secret" {
 		t.Errorf("X-Ingest-Key = %q, want secret", seen)
+	}
+}
+
+func TestReadsCarryTheServiceTokenAsBearer(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "svc-token", "")
+	if _, err := c.Live(context.Background(), []string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "Bearer svc-token" {
+		t.Fatalf("Authorization = %q", got.Get("Authorization"))
+	}
+	if got.Get("X-Ingest-Key") != "" {
+		t.Fatalf("no ingest key was configured, but one was sent: %q", got.Get("X-Ingest-Key"))
+	}
+	if !c.Authenticated() {
+		t.Fatal("a service token alone must count as authenticated")
 	}
 }

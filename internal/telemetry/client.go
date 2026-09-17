@@ -95,18 +95,27 @@ type VehicleDay struct {
 }
 
 // Client talks to the tracking service.
+//
+// Two credentials, either of which is enough. The platform service token is
+// the normal one: the same internal credential every platform service
+// presents to the others, over the private VPC hop, with nothing to hand
+// out or rotate separately. The ingest key is the device credential and
+// stays only as a fallback for a tracking deployment that has not yet
+// learned to accept service tokens.
 type Client struct {
-	baseURL string
-	key     string
-	http    *http.Client
+	baseURL      string
+	serviceToken string
+	key          string
+	http         *http.Client
 }
 
 // New builds a client. An empty base URL yields one whose every call returns
 // ErrNotConfigured, so telemetry is optional rather than a startup dependency.
-func New(baseURL, ingestKey string) *Client {
+func New(baseURL, serviceToken, ingestKey string) *Client {
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		key:     ingestKey,
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		serviceToken: serviceToken,
+		key:          ingestKey,
 		// Short. A planner's screen waits on this, and a slow answer is worse
 		// than the fallback position it would have used anyway.
 		http: &http.Client{Timeout: 10 * time.Second},
@@ -115,10 +124,12 @@ func New(baseURL, ingestKey string) *Client {
 
 func (c *Client) Configured() bool { return c != nil && c.baseURL != "" }
 
-// Authenticated reports whether reads would carry a key. The base URL has a
-// default, so Configured alone is true on every deployment; a background job
-// that would only ever be answered 401 should check this instead.
-func (c *Client) Authenticated() bool { return c.Configured() && c.key != "" }
+// Authenticated reports whether reads would carry a credential. The base URL
+// has a default, so Configured alone is true on every deployment; a
+// background job that would only ever be answered 401 should check this.
+func (c *Client) Authenticated() bool {
+	return c.Configured() && (c.serviceToken != "" || c.key != "")
+}
 
 // maxIMEIsPerRequest is the tracking service's documented ceiling on /v1/live.
 // Larger sets are split rather than truncated: silently dropping the tail would
@@ -238,6 +249,9 @@ func (c *Client) get(ctx context.Context, path string, into any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return fmt.Errorf("telemetry: build request: %w", err)
+	}
+	if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 	if c.key != "" {
 		req.Header.Set("X-Ingest-Key", c.key)

@@ -191,7 +191,7 @@ func run() error {
 	// Live vehicle positions. Optional: with no base URL configured, dispatch
 	// falls back to each truck's last unloading point, which is where this
 	// service got its positions before telemetry existed.
-	telemetryClient := telemetry.New(cfg.TelemetryBaseURL, cfg.TelemetryKey)
+	telemetryClient := telemetry.New(cfg.TelemetryBaseURL, cfg.ServiceToken, cfg.TelemetryKey)
 	if !telemetryClient.Configured() {
 		slog.Warn("telemetry not configured; dispatch will rank trucks on their last unloading point")
 	}
@@ -284,9 +284,10 @@ func run() error {
 	stopEviction := startRouteCacheEviction(routeCacheRepo)
 	defer stopEviction()
 
-	// Arrival evidence from FMS positions. Idle until TELEMETRY_INGEST_KEY is
-	// set; see services.GeofenceWatcher for why this polls rather than waits
-	// for FMS to push.
+	// Arrival evidence from FMS positions, authenticated with the platform
+	// service token (or the ingest key while tracking still needs one). See
+	// services.GeofenceWatcher for why this polls rather than waits for FMS
+	// to push.
 	geofenceWatcher := services.NewGeofenceWatcher(shipmentRepo, shipmentService, masterDataClient, telemetryClient, cfg.GeofencePollInterval)
 	stopGeofence := geofenceWatcher.Start()
 	defer stopGeofence()
