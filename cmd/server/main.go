@@ -242,7 +242,7 @@ func run() error {
 		Verifier:    verifier,
 		Remote:      authClient,
 		Revocations: revocationChecker,
-		Routing:     handlers.NewRoutingHandler(routingClient),
+		Routing:     handlers.NewRoutingHandler(routeCache),
 		Upload:      handlers.NewUploadHandler(storageClient),
 		Order:       handlers.NewOrderHandler(orderService),
 		Shipment:    handlers.NewShipmentHandler(shipmentService),

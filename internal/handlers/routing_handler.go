@@ -15,11 +15,15 @@ import (
 // directly because the request carries an API key. A browser calling MAPID
 // would ship that key to every visitor, and a key in a public bundle belongs to
 // whoever finds it.
+//
+// It plans through the same cache the order flows use, so a lane the planner
+// previews and then books costs one MAPID call, not two, and the same lane
+// asked again tomorrow costs none.
 type RoutingHandler struct {
-	routes *routing.Client
+	routes *routing.Cache
 }
 
-func NewRoutingHandler(r *routing.Client) *RoutingHandler {
+func NewRoutingHandler(r *routing.Cache) *RoutingHandler {
 	return &RoutingHandler{routes: r}
 }
 
@@ -70,11 +74,10 @@ func (h *RoutingHandler) Plan(c *gin.Context) {
 		return
 	}
 
-	route, err := h.routes.Route(c.Request.Context(), routing.Request{
-		Points:           points,
-		Profile:          profile,
-		AvoidTolls:       body.AvoidTolls,
-		WithTollSegments: body.IncludeTolls || body.AvoidTolls,
+	result, err := h.routes.Route(c.Request.Context(), routing.Request{
+		Points:     points,
+		Profile:    profile,
+		AvoidTolls: body.AvoidTolls,
 	})
 	if err != nil {
 		if errors.Is(err, routing.ErrNotConfigured) {
@@ -90,11 +93,15 @@ func (h *RoutingHandler) Plan(c *gin.Context) {
 
 	// Duration is seconds rather than a Go Duration: marshalled directly it
 	// becomes nanoseconds, which reads as a nonsense integer to a client.
+	route := result.Route
 	response.OK(c, gin.H{
 		"distanceMeters":  route.DistanceMeters,
 		"durationSeconds": route.DurationSeconds(),
 		"geometry":        route.Geometry,
 		"bbox":            route.BBox,
 		"tollSegments":    route.TollSegments,
+		"hasToll":         result.HasToll,
+		// Whether this answer came from the cache rather than MAPID.
+		"cached": result.Cached,
 	})
 }
