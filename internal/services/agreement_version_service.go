@@ -103,10 +103,18 @@ func (s *BillingService) Revise(ctx context.Context, actor Actor, previousID uui
 	}
 
 	// A renewal is live at once; an update is announced to whoever approves.
-	if revision.StatusCode == models.AgreementActive {
-		if _, err := s.agreements.Approve(ctx, revision.ID, actor.UserID, "Renewal, no approval required"); err != nil {
+	//
+	// The renewal is created PENDING and put in force through Approve — the
+	// one place that activates a version and retires the one it replaces in
+	// a single transaction. Creating it active and then approving it
+	// answered 409 (Approve rightly refuses a non-pending row) with the new
+	// version already committed, leaving two live versions of the contract.
+	if in.Kind == models.RevisionRenewal {
+		approved, err := s.agreements.Approve(ctx, revision.ID, actor.UserID, "Renewal, no approval required")
+		if err != nil {
 			return nil, err
 		}
+		revision = approved
 	} else {
 		s.notifier.Notify(ctx, clients.Event{
 			Type:    notificationv1.EventType_EVENT_TYPE_AGREEMENT_CREATED,
@@ -221,12 +229,10 @@ func (s *BillingService) buildRevision(actor Actor, previous *models.Agreement, 
 		revision.Rates = append(revision.Rates, rate)
 	}
 
-	// The rule the whole workflow turns on.
-	if in.Kind == models.RevisionRenewal {
-		revision.StatusCode = models.AgreementActive
-	} else {
-		revision.StatusCode = models.AgreementPendingApproval
-	}
+	// Every revision is born pending. The rule the whole workflow turns on
+	// is applied by Revise: a renewal is approved on the spot, an update
+	// waits for someone other than its author.
+	revision.StatusCode = models.AgreementPendingApproval
 
 	return revision, nil
 }
