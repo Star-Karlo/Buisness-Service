@@ -76,7 +76,15 @@ func (s *BillingService) Revise(ctx context.Context, actor Actor, previousID uui
 	}
 
 	if s.fields != nil {
-		if err := s.fields.Validate(ctx, actor.CompanyID, fieldconfig.EntityAgreement, in.Present); err != nil {
+		// A revision inherits the parties and the agreement type from the
+		// version it replaces; they are not in its body and cannot change.
+		// Without this every renewal failed "missing required: Agreement
+		// type" — the catalogue's check is the same one create runs.
+		present := map[string]bool{"customerId": true, "agreementType": true}
+		for k, v := range in.Present {
+			present[k] = v
+		}
+		if err := s.fields.Validate(ctx, actor.CompanyID, fieldconfig.EntityAgreement, present); err != nil {
 			return nil, err
 		}
 	}
