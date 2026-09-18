@@ -50,6 +50,10 @@ type Config struct {
 	// positions; dispatch then ranks on last unloading points instead.
 	TelemetryBaseURL string
 	TelemetryKey     string
+	// GeocodeBaseURL is the platform's own geocoding service (fms-geocode),
+	// reached over the VPC with the service token. Empty disables address
+	// search on the warehouse form.
+	GeocodeBaseURL string
 	// GeofencePollInterval is how often active shipments' trucks are checked
 	// against their warehouses' geofences. One minute is well inside what a
 	// warehouse notices and one request per tick regardless of fleet size.
@@ -145,6 +149,7 @@ func Load() (*Config, error) {
 		// parked truck and the behaviour this service had before.
 		TelemetryBaseURL:        envOr("TELEMETRY_BASE_URL", "https://fms-tracking.karlo.id"),
 		TelemetryKey:            envOr("TELEMETRY_INGEST_KEY", ""),
+		GeocodeBaseURL:          envOr("GEOCODE_BASE_URL", ""),
 		GeofencePollInterval:    durationOr("GEOFENCE_POLL_INTERVAL", time.Minute),
 		ArchiveRetainOrders:     durationOr("ARCHIVE_RETAIN_ORDERS", 365*24*time.Hour),
 		ArchiveRetainAgreements: durationOr("ARCHIVE_RETAIN_AGREEMENTS", 365*24*time.Hour),

@@ -93,6 +93,9 @@ func Setup(d Deps) *gin.Engine {
 	// separate permission would have to be granted to everybody, which is a
 	// permission that means nothing.
 	api.POST("/routing/route", authctx.RequireModule("order.read"), d.Routing.Plan)
+	// Address search for placing a warehouse pin; the same read right, since
+	// it is the same map.
+	api.GET("/routing/geocode", authctx.RequireModule("warehouse.read"), d.Routing.Geocode)
 
 	// Orders.
 	orders := api.Group("/orders")

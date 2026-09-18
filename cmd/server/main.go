@@ -17,6 +17,7 @@ import (
 
 	"github.com/karlo/business-service/internal/clients"
 	"github.com/karlo/business-service/internal/config"
+	"github.com/karlo/business-service/internal/geocode"
 	"github.com/karlo/business-service/internal/grpcserver"
 	"github.com/karlo/business-service/internal/handlers"
 	"github.com/karlo/business-service/internal/platform/authctx"
@@ -192,6 +193,7 @@ func run() error {
 	// falls back to each truck's last unloading point, which is where this
 	// service got its positions before telemetry existed.
 	telemetryClient := telemetry.New(cfg.TelemetryBaseURL, cfg.ServiceToken, cfg.TelemetryKey)
+	geocodeClient := geocode.New(cfg.GeocodeBaseURL, cfg.ServiceToken)
 	if !telemetryClient.Configured() {
 		slog.Warn("telemetry not configured; dispatch will rank trucks on their last unloading point")
 	}
@@ -242,7 +244,7 @@ func run() error {
 		Verifier:    verifier,
 		Remote:      authClient,
 		Revocations: revocationChecker,
-		Routing:     handlers.NewRoutingHandler(routeCache),
+		Routing:     handlers.NewRoutingHandler(routeCache, geocodeClient),
 		Upload:      handlers.NewUploadHandler(storageClient),
 		Order:       handlers.NewOrderHandler(orderService),
 		Shipment:    handlers.NewShipmentHandler(shipmentService),

@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/karlo/business-service/internal/geocode"
 	"github.com/karlo/business-service/internal/platform/response"
 	"github.com/karlo/business-service/internal/routing"
 )
@@ -20,11 +23,42 @@ import (
 // previews and then books costs one MAPID call, not two, and the same lane
 // asked again tomorrow costs none.
 type RoutingHandler struct {
-	routes *routing.Cache
+	routes  *routing.Cache
+	geocode *geocode.Client
 }
 
-func NewRoutingHandler(r *routing.Cache) *RoutingHandler {
-	return &RoutingHandler{routes: r}
+func NewRoutingHandler(r *routing.Cache, g *geocode.Client) *RoutingHandler {
+	return &RoutingHandler{routes: r, geocode: g}
+}
+
+// Geocode searches the platform's own geocoder for a place or address.
+//
+// @Summary  Search an address or place
+// @Tags     Routing
+// @Security BearerAuth
+// @Param    q     query string true  "Free text, e.g. Jl. Raya Bekasi Cikarang"
+// @Param    limit query int    false "Max candidates (default 10)"
+// @Success  200 {array} geocode.Candidate
+// @Router   /routing/geocode [get]
+func (h *RoutingHandler) Geocode(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	if len(q) < 3 {
+		response.BadRequest(c, "q must be at least 3 characters")
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	out, err := h.geocode.Search(c.Request.Context(), q, limit)
+	if err != nil {
+		if errors.Is(err, geocode.ErrNotConfigured) {
+			// No geocoder on this deployment: an empty answer, so the form
+			// simply falls back to placing the pin by hand.
+			response.OK(c, []geocode.Candidate{})
+			return
+		}
+		response.InternalError(c, "Address search is unavailable right now")
+		return
+	}
+	response.OK(c, out)
 }
 
 type routeRequest struct {
