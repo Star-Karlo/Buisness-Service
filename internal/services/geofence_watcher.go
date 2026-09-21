@@ -83,7 +83,7 @@ func NewGeofenceWatcher(
 // evaluate, and logging that once is better than logging it every minute.
 func (w *GeofenceWatcher) Start() func() {
 	if w.telemetry == nil || !w.telemetry.Authenticated() {
-		slog.Info("geofence watcher idle: TELEMETRY_INGEST_KEY is not set")
+		slog.Info("geofence watcher idle: no telemetry credential (service token or ingest key)")
 		return func() {}
 	}
 
