@@ -272,3 +272,21 @@ type ShipmentHandover struct {
 }
 
 func (ShipmentHandover) TableName() string { return "shipment_handovers" }
+
+// ---------------------------------------------------------------------------
+// Public tracking
+// ---------------------------------------------------------------------------
+
+// TrackingLink is a public, account-less window onto one order — the link a
+// transporter copies from Control Tower for its customer. The token is the
+// whole secret; see migrations/000010_tracking_links.up.sql.
+type TrackingLink struct {
+	Token     string     `gorm:"primaryKey" json:"token"`
+	OrderID   uuid.UUID  `gorm:"type:uuid;not null" json:"orderId"`
+	CompanyID uuid.UUID  `gorm:"type:uuid;not null" json:"companyId"`
+	CreatedBy *uuid.UUID `gorm:"type:uuid" json:"createdBy,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+}
+
+func (TrackingLink) TableName() string { return "order_tracking_links" }

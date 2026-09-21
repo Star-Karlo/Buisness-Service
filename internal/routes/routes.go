@@ -44,6 +44,7 @@ type Deps struct {
 	Allowance   *handlers.AllowanceHandler
 	Ledger      *handlers.LedgerHandler
 	Handover    *handlers.HandoverHandler
+	Tracking    *handlers.TrackingHandler
 }
 
 func Setup(d Deps) *gin.Engine {
@@ -85,6 +86,13 @@ func Setup(d Deps) *gin.Engine {
 		router.GET("/swagger/*any", ginswagger.WrapHandler(swaggerfiles.Handler))
 	}
 
+	// Public tracking: the one unauthenticated read. Registered on the root
+	// router, outside the group's auth middleware; the token in the path is
+	// the credential and the answer is one order's status, nothing more.
+	// "/orders/track/…" sits beside "/orders/:id" — gin routes the static
+	// segment first — so it needs no load-balancer rule of its own.
+	router.GET("/api/v1/orders/track/:token", d.Tracking.Public)
+
 	api := router.Group("/api/v1")
 	api.Use(authctx.RequireAuthWithRevocations(d.Verifier, d.Remote, d.Revocations))
 
@@ -110,6 +118,9 @@ func Setup(d Deps) *gin.Engine {
 	orders.PUT("/:id/status", d.Order.Transition)
 	orders.PUT("/:id/assign", authctx.RequireModule("order.assignDriver"), d.Order.AssignDriver)
 	orders.GET("/:id/shipment", authctx.RequireModule("order.read"), d.Shipment.GetByOrder)
+	// Customer tracking link — anyone who may read the order may share it.
+	orders.POST("/:id/tracking-link", authctx.RequireModule("order.read"), d.Tracking.Link)
+	orders.DELETE("/:id/tracking-link", authctx.RequireModule("order.update"), d.Tracking.Revoke)
 
 	// File uploads. Deliberately NOT gated on a domain module: every screen
 	// that attaches a file needs this, and a truck photo and an agreement PDF

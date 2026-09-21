@@ -143,6 +143,7 @@ func run() error {
 	orderItemRepo := repository.NewOrderItemRepository(db)
 	routeCacheRepo := repository.NewRouteCacheRepository(db)
 	orderRouteRepo := repository.NewOrderRouteRepository(db)
+	trackingLinkRepo := repository.NewTrackingLinkRepository(db)
 	allowanceRepo := repository.NewAllowanceRepository(db)
 	handoverRepo := repository.NewHandoverRepository(db)
 	ledgerRepo := repository.NewLedgerRepository(db)
@@ -205,6 +206,7 @@ func run() error {
 	dispatchService := services.NewDispatchService(orderRepo, orderRouteRepo, routeCache, masterDataClient, telemetryClient)
 	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo)
 	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
+	trackingService := services.NewTrackingService(trackingLinkRepo, orderRepo, shipmentRepo, orderRouteRepo, authClient, masterDataClient, dispatchService)
 
 	// The order service plans the haul route when an order is created. Injected
 	// after construction rather than as a constructor argument because dispatch
@@ -254,6 +256,7 @@ func run() error {
 		Allowance:   handlers.NewAllowanceHandler(allowanceService),
 		Handover:    handlers.NewHandoverHandler(handoverService),
 		Ledger:      handlers.NewLedgerHandler(ledgerRepo),
+		Tracking:    handlers.NewTrackingHandler(trackingService),
 	})
 
 	httpSrv := &http.Server{
