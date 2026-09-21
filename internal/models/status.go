@@ -163,9 +163,14 @@ var orderTransitions = map[string][]Transition{
 		{To: OrderCancelled, AllowedRoles: []string{RoleAdmin, RoleSuperadmin}},
 	},
 	OrderInTransit: {
+		// The shipment finishing completes the order outright. "Delivered,
+		// awaiting the shipper's confirmation" is not a step in Karlo's flow:
+		// the POD verification already was the confirmation.
+		{To: OrderCompleted},
 		{To: OrderDelivered},
 		{To: OrderCancelled, AllowedRoles: []string{RoleAdmin, RoleSuperadmin}},
 	},
+	// Legacy: orders already sitting in delivered can still be completed.
 	OrderDelivered: {
 		{To: OrderCompleted, AllowedRoles: []string{RoleShipper, RoleWarehousePic, RoleAdmin, RoleSuperadmin}},
 	},

@@ -234,7 +234,7 @@ func (s *ShipmentService) syncOrderStatus(ctx context.Context, actor Actor, orde
 	case models.ShipmentToLoading:
 		target = models.OrderInTransit
 	case models.ShipmentFinished:
-		target = models.OrderDelivered
+		target = models.OrderCompleted
 	default:
 		return nil
 	}
