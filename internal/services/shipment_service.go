@@ -123,6 +123,13 @@ func (s *ShipmentService) assertActorMayAdvance(actor Actor, shipment *models.Sh
 	if actor.Role == models.RoleAdmin || actor.Role == models.RoleSuperadmin {
 		return nil
 	}
+	// The testing bypass steps past the driver-only rule, never past tenancy.
+	if actor.StatusBypass {
+		if !order.InvolvesCompany(actor.CompanyID) {
+			return fmt.Errorf("%w: your company is not a party to this order", ErrForbidden)
+		}
+		return nil
+	}
 
 	// A driver may only move their own shipment. Without this, any driver in
 	// the company could report progress on anyone's job.

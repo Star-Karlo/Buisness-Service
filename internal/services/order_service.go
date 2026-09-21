@@ -49,6 +49,15 @@ type Actor struct {
 	// parties and history entries can then say so rather than presenting the
 	// action as the client's own.
 	ActingFor bool
+
+	// StatusBypass is the TEMPORARY end-to-end testing switch Nathan asked
+	// for (Sept 2026): a company Administrator (or Karlo staff) who sends
+	// X-Status-Bypass: 1 may take state-machine steps that belong to another
+	// role — walking an order through the driver's and warehouse's steps
+	// without the driver app. It widens the machine's ROLE check only;
+	// tenancy and ownership checks are untouched. Disabled with
+	// STATUS_BYPASS_ENABLED=false; remove together with the console's Mode Uji.
+	StatusBypass bool
 }
 
 // OrderService owns the order lifecycle.
@@ -684,6 +693,9 @@ func (s *OrderService) Transition(ctx context.Context, actor Actor, id uuid.UUID
 // on — a fact about the order, not the token, which only knows the tenant's
 // role name.
 func machineRole(actor Actor, order *models.Order) string {
+	if actor.StatusBypass {
+		return models.RoleAdmin
+	}
 	switch actor.Role {
 	case models.RoleAdmin, models.RoleSuperadmin, models.RoleDriver, models.RoleWarehousePic, models.RoleManager:
 		return actor.Role

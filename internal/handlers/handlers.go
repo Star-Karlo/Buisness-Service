@@ -8,6 +8,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -449,6 +450,27 @@ func (h *OrderHandler) Summary(c *gin.Context) {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+// statusBypassEnabled gates the TEMPORARY X-Status-Bypass testing header.
+// On unless STATUS_BYPASS_ENABLED=false; see services.Actor.StatusBypass.
+var statusBypassEnabled = os.Getenv("STATUS_BYPASS_ENABLED") != "false"
+
+// statusBypassRequested is true when an eligible caller — Karlo staff or a
+// company's own Administrator — asked for the testing bypass on this request.
+// The header alone does nothing for any other role.
+func statusBypassRequested(c *gin.Context, rawRole string, platformStaff bool) bool {
+	if !statusBypassEnabled || c.GetHeader("X-Status-Bypass") != "1" {
+		return false
+	}
+	if platformStaff {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(rawRole)) {
+	case "admin", "administrator", "superadmin":
+		return true
+	}
+	return false
+}
+
 // callerActor builds the Actor from the verified token. Company and user
 // identity come from the token and never from the request.
 func callerActor(c *gin.Context) (services.Actor, bool) {
@@ -484,6 +506,7 @@ func callerActor(c *gin.Context) (services.Actor, bool) {
 		CompanyID:     companyID,
 		Role:          role,
 		PlatformStaff: principal.IsPlatformStaff,
+		StatusBypass:  statusBypassRequested(c, principal.Role(), principal.IsPlatformStaff),
 	}
 
 	// Acting for a client.
