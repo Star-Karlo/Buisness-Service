@@ -130,7 +130,12 @@ func (h *ShipmentHandler) NextStates(c *gin.Context) {
 		return
 	}
 
-	next := models.NextShipmentStates(shipment.StatusCode, actor.Role)
+	role := actor.Role
+	if actor.StatusBypass {
+		// The testing bypass lists every step, as the advance path would accept.
+		role = models.RoleAdmin
+	}
+	next := models.NextShipmentStates(shipment.StatusCode, role)
 
 	// Same filtering as the order transitions, and for the same reason: a
 	// client renders buttons from this list, so an entry the caller cannot
