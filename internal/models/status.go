@@ -194,9 +194,13 @@ var shipmentTransitions = map[string][]Transition{
 		{To: ShipmentCancelled, AllowedRoles: []string{RoleTransporter, RoleManager, RoleAdmin, RoleSuperadmin}},
 	},
 	ShipmentAtLoading: {
-		// The warehouse checks the driver in before loading may begin.
-		{To: ShipmentLoadingApproved, AllowedRoles: []string{RoleWarehousePic, RoleAdmin, RoleSuperadmin}},
+		// Arrival goes straight to loading. The warehouse's own check-in
+		// ("Muat Disetujui") is not an event in Karlo's order flow — the
+		// warehouse's say-so is the POD verification later, not a gate here.
+		{To: ShipmentLoading, AllowedRoles: []string{RoleDriver}},
 	},
+	// Kept so a shipment already in this state (from before the step was
+	// dropped) can still move on; nothing enters it any more.
 	ShipmentLoadingApproved: {
 		{To: ShipmentLoading, AllowedRoles: []string{RoleDriver}},
 	},
@@ -210,8 +214,9 @@ var shipmentTransitions = map[string][]Transition{
 		{To: ShipmentAtUnloading, AllowedRoles: []string{RoleDriver}},
 	},
 	ShipmentAtUnloading: {
-		{To: ShipmentUnloadingApproved, AllowedRoles: []string{RoleWarehousePic, RoleAdmin, RoleSuperadmin}},
+		{To: ShipmentUnloading, AllowedRoles: []string{RoleDriver}},
 	},
+	// Legacy state, see ShipmentLoadingApproved.
 	ShipmentUnloadingApproved: {
 		{To: ShipmentUnloading, AllowedRoles: []string{RoleDriver}},
 	},

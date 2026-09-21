@@ -67,12 +67,10 @@ func TestShipmentLifecycleInOrder(t *testing.T) {
 	}{
 		{models.ShipmentToLoading, models.RoleDriver},
 		{models.ShipmentAtLoading, models.RoleDriver},
-		{models.ShipmentLoadingApproved, models.RoleWarehousePic},
 		{models.ShipmentLoading, models.RoleDriver},
 		{models.ShipmentLoaded, models.RoleDriver},
 		{models.ShipmentToUnloading, models.RoleDriver},
 		{models.ShipmentAtUnloading, models.RoleDriver},
-		{models.ShipmentUnloadingApproved, models.RoleWarehousePic},
 		{models.ShipmentUnloading, models.RoleDriver},
 		{models.ShipmentUnloaded, models.RoleDriver},
 		{models.ShipmentFinished, models.RoleWarehousePic},
@@ -94,9 +92,10 @@ func TestShipmentLifecycleInOrder(t *testing.T) {
 // TestShipmentRoleSeparation confirms the driver/warehouse split the monolith
 // lost when it aliased scan-code, checklist and approval onto one handler.
 func TestShipmentRoleSeparation(t *testing.T) {
-	// A driver cannot approve their own loading: the warehouse checks them in.
-	if err := models.CanTransitionShipment(models.ShipmentAtLoading, models.ShipmentLoadingApproved, models.RoleDriver); err == nil {
-		t.Error("a driver must not be able to approve their own loading")
+	// The warehouse's check-in is no longer a step: an arrived driver starts
+	// loading, and "Muat Disetujui" is not reachable from arrival.
+	if err := models.CanTransitionShipment(models.ShipmentAtLoading, models.ShipmentLoadingApproved, models.RoleWarehousePic); err == nil {
+		t.Error("loading approval must not be a step in the flow any more")
 	}
 	// Nor sign off their own delivery.
 	if err := models.CanTransitionShipment(models.ShipmentUnloaded, models.ShipmentFinished, models.RoleDriver); err == nil {
