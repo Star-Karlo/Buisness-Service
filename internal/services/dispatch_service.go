@@ -387,10 +387,35 @@ func (s *DispatchService) planLeg(ctx context.Context, orderID uuid.UUID, leg st
 
 // Routes returns an order's planned legs.
 func (s *DispatchService) Routes(ctx context.Context, actor Actor, orderID uuid.UUID) ([]models.OrderRoute, error) {
-	if _, err := s.orders.FindByID(ctx, actor.CompanyID, orderID); err != nil {
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, orderID)
+	if err != nil {
 		return nil, err
 	}
-	return s.routes.ListByOrder(ctx, orderID)
+	legs, err := s.routes.ListByOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Backfill. Orders from before route planning at creation, or whose plan
+	// failed at the time (MAPID outage), have no haul leg. The planned route is
+	// part of the order's history — what the trip was quoted against — so it
+	// is stored on first read rather than recomputed on every look: the cache
+	// answers if the lane was ever planned, MAPID if not.
+	hasHaul := false
+	for _, l := range legs {
+		if l.Leg == models.LegHaul {
+			hasHaul = true
+			break
+		}
+	}
+	if !hasHaul && order.OriginWarehouseID != nil && order.DestinationWarehouseID != nil {
+		if err := s.PlanHaul(ctx, order); err != nil {
+			slog.WarnContext(ctx, "haul backfill failed", "orderId", orderID, "error", err)
+		} else if legs, err = s.routes.ListByOrder(ctx, orderID); err != nil {
+			return nil, err
+		}
+	}
+	return legs, nil
 }
 
 // truckPosition resolves one truck, live first.
