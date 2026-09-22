@@ -345,8 +345,8 @@ func (s *OrderService) applyAgreementPrice(ctx context.Context, actor Actor, ord
 		return fmt.Errorf("resolve company settings: %w", err)
 	}
 
-	if !agreement.IsUsable(time.Now(), settings.GetActiveAgreementVerifiedOnly()) {
-		return fmt.Errorf("%w: agreement %s is not usable for new orders", ErrValidation, agreement.AgreementNumber)
+	if reason := agreement.UnusableReason(time.Now(), settings.GetActiveAgreementVerifiedOnly()); reason != "" {
+		return fmt.Errorf("%w: agreement %s tidak bisa dipakai untuk order baru: %s", ErrValidation, agreement.AgreementNumber, reason)
 	}
 
 	order.TransporterCompanyID = &agreement.TransporterCompanyID

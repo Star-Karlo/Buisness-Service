@@ -129,15 +129,48 @@ func (a *Agreement) AfterFind(*gorm.DB) error {
 // strictVerification reflects the ordering company's
 // active_agreement_verified_only setting.
 func (a *Agreement) IsUsable(now time.Time, strictVerification bool) bool {
+	return a.UnusableReason(now, strictVerification) == ""
+}
+
+// BusinessZone is the calendar the validity dates are read in. The console
+// stores a chosen date as midnight UTC; a planner in Jakarta reading
+// "berlaku mulai 23 Sep" expects it to hold from 00:00 WIB, seven hours
+// before that instant — so the comparison is made on calendar days here.
+var BusinessZone = func() *time.Location {
+	if loc, err := time.LoadLocation("Asia/Jakarta"); err == nil {
+		return loc
+	}
+	return time.FixedZone("WIB", 7*3600)
+}()
+
+// UnusableReason says why an order cannot be placed against this agreement
+// now, or "" when it can. The reason is the message the planner sees, so it
+// names the date rather than just refusing.
+func (a *Agreement) UnusableReason(now time.Time, strictVerification bool) string {
 	if a.StatusCode != AgreementActive {
-		return false
+		return "status " + StatusLabel(DomainAgreement, a.StatusCode) + " (bukan Aktif)"
 	}
 	if strictVerification && !a.Verified {
-		return false
+		return "belum diverifikasi"
 	}
-	// Dates are inclusive at both ends: an agreement valid until the 31st can
-	// still be used on the 31st.
-	return !now.Before(a.ValidFrom) && !now.After(a.ValidUntil.Add(24*time.Hour-time.Nanosecond))
+	// Dates are inclusive at both ends, on the calendar day: an agreement
+	// valid until the 31st can still be used on the 31st.
+	day := func(t time.Time) time.Time {
+		y, m, d := t.In(BusinessZone).Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, BusinessZone)
+	}
+	today := day(now)
+	// The stored instants are midnight UTC of the chosen date; read the
+	// date they name rather than the instant.
+	from := time.Date(a.ValidFrom.UTC().Year(), a.ValidFrom.UTC().Month(), a.ValidFrom.UTC().Day(), 0, 0, 0, 0, BusinessZone)
+	until := time.Date(a.ValidUntil.UTC().Year(), a.ValidUntil.UTC().Month(), a.ValidUntil.UTC().Day(), 0, 0, 0, 0, BusinessZone)
+	if today.Before(from) {
+		return "berlaku mulai " + from.Format("2 Jan 2006")
+	}
+	if today.After(until) {
+		return "berakhir " + until.Format("2 Jan 2006")
+	}
+	return ""
 }
 
 // AgreementRate is one price line of an agreement.
