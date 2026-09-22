@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,9 +69,42 @@ type Evidence struct {
 
 	TollEstimate decimal.Decimal `json:"tollEstimate"`
 
+	// TollEstimateSource says what TollEstimate is: "tariff" when every
+	// tolled leg carried a gate-priced fare from MAPID (the figure is the
+	// real tariff for TollGolongan), "rate" when it fell back to the per-km
+	// rate for at least one leg.
+	TollEstimateSource string `json:"tollEstimateSource"`
+	// TollGolongan is the vehicle class the tariff was read for (1–5).
+	TollGolongan int `json:"tollGolongan,omitempty"`
+	// TollPrices is the fare per golongan across the whole journey, when
+	// every tolled leg had a tariff — so the screen can show the other classes.
+	TollPrices map[string]int64 `json:"tollPrices,omitempty"`
+
 	// TollDataComplete is false when part of the route had no toll data.
 	// Surfaced so a low estimate is visibly a floor rather than a figure.
 	TollDataComplete bool `json:"tollDataComplete"`
+}
+
+// golonganForOrder picks the toll class the tariff is read for: the
+// assigned truck's, from its type name, else Golongan II (a two-axle truck,
+// the commonest case). The class the driver actually pays at is what the
+// finalised allowance records.
+func golonganForOrder(order *models.Order) int {
+	if order == nil {
+		return 2
+	}
+	t := strings.ToLower(order.TruckTypeName)
+	switch {
+	case strings.Contains(t, "pickup"), strings.Contains(t, "van"):
+		return 1
+	case strings.Contains(t, "trailer 4"), strings.Contains(t, "40"), strings.Contains(t, "45"):
+		return 5
+	case strings.Contains(t, "trailer"):
+		return 4
+	case strings.Contains(t, "tronton"):
+		return 3
+	}
+	return 2
 }
 
 // View is the allowance plus the evidence behind it.
@@ -98,11 +133,12 @@ func (s *AllowanceService) List(ctx context.Context, actor Actor, state string, 
 }
 
 func (s *AllowanceService) Get(ctx context.Context, actor Actor, orderID uuid.UUID) (*View, error) {
-	if _, err := s.orders.FindByID(ctx, actor.CompanyID, orderID); err != nil {
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, orderID)
+	if err != nil {
 		return nil, err
 	}
 
-	evidence, err := s.evidence(ctx, orderID)
+	evidence, err := s.evidence(ctx, orderID, order)
 	if err != nil {
 		return nil, err
 	}
@@ -125,13 +161,19 @@ func (s *AllowanceService) Get(ctx context.Context, actor Actor, orderID uuid.UU
 }
 
 // evidence reads the planned legs and works out what they imply.
-func (s *AllowanceService) evidence(ctx context.Context, orderID uuid.UUID) (Evidence, error) {
+func (s *AllowanceService) evidence(ctx context.Context, orderID uuid.UUID, order *models.Order) (Evidence, error) {
 	legs, err := s.routes.ListByOrder(ctx, orderID)
 	if err != nil {
 		return Evidence{}, err
 	}
 
-	ev := Evidence{TollDataComplete: true}
+	golongan := golonganForOrder(order)
+	ev := Evidence{TollDataComplete: true, TollEstimateSource: "tariff", TollGolongan: golongan}
+	classKey := fmt.Sprintf("golongan_%d", golongan)
+	tariff := decimal.Zero // sum of gate-priced fares for the chosen class
+	rateMeters := 0        // tolled metres with no tariff, priced at the rate
+	prices := map[string]int64{}
+	anyToll := false
 
 	for _, leg := range legs {
 		if leg.Cache == nil {
@@ -157,14 +199,61 @@ func (s *AllowanceService) evidence(ctx context.Context, orderID uuid.UUID) (Evi
 		if leg.Cache.HasToll && leg.Cache.TollDistanceMeters == 0 {
 			ev.TollDataComplete = false
 		}
+
+		// The real fare when MAPID priced the gates for this leg; the per-km
+		// rate only for a tolled leg it could not price.
+		if !leg.Cache.HasToll {
+			continue
+		}
+		anyToll = true
+		if legPrices := tollPricesOf(leg.Cache.Toll); legPrices != nil {
+			tariff = tariff.Add(decimal.NewFromInt(legPrices[classKey]))
+			for k, v := range legPrices {
+				prices[k] += v
+			}
+		} else {
+			rateMeters += leg.Cache.TollDistanceMeters
+			ev.TollEstimateSource = "rate"
+		}
 	}
 
-	ev.TollEstimate = decimal.NewFromInt(int64(ev.TollDistanceMeters)).
+	ev.TollEstimate = tariff.Add(decimal.NewFromInt(int64(rateMeters)).
 		Div(decimal.NewFromInt(1000)).
-		Mul(decimal.NewFromInt(TollRatePerKm)).
-		Round(0)
+		Mul(decimal.NewFromInt(TollRatePerKm))).Round(0)
+	if anyToll && ev.TollEstimateSource == "tariff" {
+		ev.TollPrices = prices
+	}
+	if !anyToll {
+		ev.TollEstimateSource = "none"
+		ev.TollGolongan = 0
+	}
 
 	return ev, nil
+}
+
+// tollPricesOf reads the per-golongan fares MAPID stored with a route.
+func tollPricesOf(raw models.JSONB) map[string]int64 {
+	if len(raw) == 0 {
+		return nil
+	}
+	p, ok := raw["prices"].(map[string]interface{})
+	if !ok || len(p) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(p))
+	for k, v := range p {
+		switch n := v.(type) {
+		case float64:
+			out[k] = int64(n)
+		case int64:
+			out[k] = n
+		case json.Number:
+			if f, err := n.Float64(); err == nil {
+				out[k] = int64(f)
+			}
+		}
+	}
+	return out
 }
 
 // SaveAllowanceInput is a submitted advance.
@@ -187,7 +276,8 @@ type SaveAllowanceInput struct {
 // this point changes the live distance, and it must not silently restate what
 // somebody was paid against.
 func (s *AllowanceService) Save(ctx context.Context, actor Actor, orderID uuid.UUID, in SaveAllowanceInput) (*View, error) {
-	if _, err := s.orders.FindByID(ctx, actor.CompanyID, orderID); err != nil {
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, orderID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -207,7 +297,7 @@ func (s *AllowanceService) Save(ctx context.Context, actor Actor, orderID uuid.U
 		})
 	}
 
-	evidence, err := s.evidence(ctx, orderID)
+	evidence, err := s.evidence(ctx, orderID, order)
 	if err != nil {
 		return nil, err
 	}
