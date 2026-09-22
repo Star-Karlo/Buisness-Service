@@ -68,12 +68,14 @@ func TestShipmentLifecycleInOrder(t *testing.T) {
 		{models.ShipmentToLoading, models.RoleDriver},
 		{models.ShipmentAtLoading, models.RoleDriver},
 		{models.ShipmentLoading, models.RoleDriver},
-		{models.ShipmentLoaded, models.RoleDriver},
+		// The reviewed POD ends loading and unloading (PodService.Review),
+		// as the system, not the driver.
+		{models.ShipmentLoaded, models.RoleSystem},
 		{models.ShipmentToUnloading, models.RoleDriver},
 		{models.ShipmentAtUnloading, models.RoleDriver},
 		{models.ShipmentUnloading, models.RoleDriver},
-		{models.ShipmentUnloaded, models.RoleDriver},
-		{models.ShipmentFinished, models.RoleWarehousePic},
+		{models.ShipmentUnloaded, models.RoleSystem},
+		{models.ShipmentFinished, models.RoleSystem},
 	}
 
 	current := models.ShipmentAssigned
