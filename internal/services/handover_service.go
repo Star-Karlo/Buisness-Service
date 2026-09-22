@@ -51,12 +51,22 @@ type HandoverService struct {
 	// unloading POD's state. Both optional (tests).
 	lifecycle *ShipmentService
 	pods      *repository.PodRepository
+	// consoleBaseURL builds the Web-Field link the PIC gets on WhatsApp.
+	consoleBaseURL string
 }
 
 // WithDriverFlow wires the shipment lifecycle and POD register in.
-func (s *HandoverService) WithDriverFlow(lifecycle *ShipmentService, pods *repository.PodRepository) *HandoverService {
-	s.lifecycle, s.pods = lifecycle, pods
+func (s *HandoverService) WithDriverFlow(lifecycle *ShipmentService, pods *repository.PodRepository, consoleBaseURL string) *HandoverService {
+	s.lifecycle, s.pods, s.consoleBaseURL = lifecycle, pods, strings.TrimRight(consoleBaseURL, "/")
 	return s
+}
+
+// FieldURL is the PIC's page for a handover.
+func (s *HandoverService) FieldURL(token string) string {
+	if s.consoleBaseURL == "" {
+		return ""
+	}
+	return s.consoleBaseURL + "/field/" + token
 }
 
 func NewHandoverService(
@@ -127,14 +137,19 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	// Sent after the row is committed, not before. A code that was delivered
 	// but not stored can never be verified, which strands the driver at the
 	// gate; a code stored but not delivered is recoverable by asking again.
+	orderNumber := ""
+	if order, err := s.orders.FindByIDForService(ctx, shipment.OrderID); err == nil {
+		orderNumber = order.OrderNumber
+	}
 	s.notifier.Notify(ctx, clients.Event{
-		Type:     notificationv1.EventType_EVENT_TYPE_OTP,
+		Type:     notificationv1.EventType_EVENT_TYPE_HANDOVER_CODE,
 		Subject:  clients.Subject{ID: shipmentID.String(), Type: "shipment"},
 		Audience: clients.ToPhone(number),
 		Params: map[string]interface{}{
-			"code":       code,
-			"expiryMins": int(handoverCodeTTL.Minutes()),
-			"fieldToken": fieldToken,
+			"orderNumber": orderNumber,
+			"code":        code,
+			"minutes":     int(handoverCodeTTL.Minutes()),
+			"fieldUrl":    s.FieldURL(fieldToken),
 		},
 		IdempotencyKey: "handover:" + row.ID.String(),
 	})

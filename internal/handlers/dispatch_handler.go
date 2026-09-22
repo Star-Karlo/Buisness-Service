@@ -428,10 +428,17 @@ func (h *HandoverHandler) Issue(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, gin.H{
+	out := gin.H{
 		"sentTo":    maskNumber(row.PICWhatsApp),
 		"expiresAt": row.ExpiresAt,
-	})
+	}
+	// The Web-Field link, so the driver's screen can show it to a PIC whose
+	// WhatsApp did not get through. It opens the cargo check, never the code.
+	if row.FieldToken != nil {
+		out["fieldToken"] = *row.FieldToken
+		out["fieldUrl"] = h.handovers.FieldURL(*row.FieldToken)
+	}
+	response.OK(c, out)
 }
 
 type verifyHandoverRequest struct {

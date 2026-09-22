@@ -209,7 +209,7 @@ func run() error {
 	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
 	shipmentService.WithDriverFlow(handoverRepo, podRepo)
 	podService := services.NewPodService(podRepo, shipmentRepo, orderRepo, shipmentService, notifier)
-	handoverService.WithDriverFlow(shipmentService, podRepo)
+	handoverService.WithDriverFlow(shipmentService, podRepo, cfg.ConsoleBaseURL)
 	trackingService := services.NewTrackingService(trackingLinkRepo, orderRepo, shipmentRepo, orderRouteRepo, authClient, masterDataClient, dispatchService)
 
 	// The order service plans the haul route when an order is created. Injected

@@ -261,8 +261,14 @@ func (s *PodService) notify(ctx context.Context, actor Actor, order *models.Orde
 	if audience == nil {
 		return
 	}
+	eventType := map[string]notificationv1.EventType{
+		"podSubmitted": notificationv1.EventType_EVENT_TYPE_POD_SUBMITTED,
+		"podApproved":  notificationv1.EventType_EVENT_TYPE_POD_APPROVED,
+		"podRejected":  notificationv1.EventType_EVENT_TYPE_POD_REJECTED,
+	}[kind]
+	stageLabel := map[string]string{"loading": "muat", "unloading": "bongkar"}[stage]
 	s.notifier.Notify(ctx, clients.Event{
-		Type:           notificationv1.EventType_EVENT_TYPE_ORDER_UPDATED,
+		Type:           eventType,
 		Subject:        clients.Subject{ID: order.ID.String(), Type: "order"},
 		Audience:       audience,
 		ActorID:        actor.UserID.String(),
@@ -271,6 +277,7 @@ func (s *PodService) notify(ctx context.Context, actor Actor, order *models.Orde
 			"orderNumber": order.OrderNumber,
 			"event":       kind,
 			"stage":       stage,
+			"stageLabel":  stageLabel,
 			"reason":      reason,
 		},
 	})

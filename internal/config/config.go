@@ -49,7 +49,10 @@ type Config struct {
 	// TelemetryBaseURL is the FMS tracking service. Empty disables live
 	// positions; dispatch then ranks on last unloading points instead.
 	TelemetryBaseURL string
-	TelemetryKey     string
+	// ConsoleBaseURL is where public console pages live (the tracking link,
+	// the PIC's Web-Field page), for links put in messages.
+	ConsoleBaseURL string
+	TelemetryKey   string
 	// GeocodeBaseURL is the platform's own geocoding service (fms-geocode),
 	// reached over the VPC with the service token. Empty disables address
 	// search on the warehouse form.
@@ -148,6 +151,7 @@ func Load() (*Config, error) {
 		// ranking trucks by their last unloading point, which is correct for a
 		// parked truck and the behaviour this service had before.
 		TelemetryBaseURL:        envOr("TELEMETRY_BASE_URL", "https://fms-tracking.karlo.id"),
+		ConsoleBaseURL:          envOr("CONSOLE_BASE_URL", "https://tms.karlo.id"),
 		TelemetryKey:            envOr("TELEMETRY_INGEST_KEY", ""),
 		GeocodeBaseURL:          envOr("GEOCODE_BASE_URL", ""),
 		GeofencePollInterval:    durationOr("GEOFENCE_POLL_INTERVAL", time.Minute),

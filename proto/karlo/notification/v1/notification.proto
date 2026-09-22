@@ -102,6 +102,13 @@ enum EventType {
   // link and their credentials on WhatsApp. No in-app copy — there is no
   // inbox yet to put it in.
   EVENT_TYPE_DRIVER_ACCOUNT_CREATED = 25;
+  // The driver flow. HANDOVER_CODE goes to the receiving PIC on WhatsApp with
+  // the OTP and the Web-Field link; POD_SUBMITTED to the reviewers; the
+  // review's outcome to the driver as a push.
+  EVENT_TYPE_HANDOVER_CODE = 26;
+  EVENT_TYPE_POD_SUBMITTED = 27;
+  EVENT_TYPE_POD_APPROVED = 28;
+  EVENT_TYPE_POD_REJECTED = 29;
 }
 
 // Audience states who should receive a notification. Exactly one field is set.

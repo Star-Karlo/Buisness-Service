@@ -116,6 +116,13 @@ const (
 	// link and their credentials on WhatsApp. No in-app copy — there is no
 	// inbox yet to put it in.
 	EventType_EVENT_TYPE_DRIVER_ACCOUNT_CREATED EventType = 25
+	// The driver flow. HANDOVER_CODE goes to the receiving PIC on WhatsApp with
+	// the OTP and the Web-Field link; POD_SUBMITTED to the reviewers; the
+	// review's outcome to the driver as a push.
+	EventType_EVENT_TYPE_HANDOVER_CODE EventType = 26
+	EventType_EVENT_TYPE_POD_SUBMITTED EventType = 27
+	EventType_EVENT_TYPE_POD_APPROVED  EventType = 28
+	EventType_EVENT_TYPE_POD_REJECTED  EventType = 29
 )
 
 // Enum value maps for EventType.
@@ -147,6 +154,10 @@ var (
 		23: "EVENT_TYPE_CHAT_MESSAGE",
 		24: "EVENT_TYPE_OTP",
 		25: "EVENT_TYPE_DRIVER_ACCOUNT_CREATED",
+		26: "EVENT_TYPE_HANDOVER_CODE",
+		27: "EVENT_TYPE_POD_SUBMITTED",
+		28: "EVENT_TYPE_POD_APPROVED",
+		29: "EVENT_TYPE_POD_REJECTED",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":                0,
@@ -175,6 +186,10 @@ var (
 		"EVENT_TYPE_CHAT_MESSAGE":               23,
 		"EVENT_TYPE_OTP":                        24,
 		"EVENT_TYPE_DRIVER_ACCOUNT_CREATED":     25,
+		"EVENT_TYPE_HANDOVER_CODE":              26,
+		"EVENT_TYPE_POD_SUBMITTED":              27,
+		"EVENT_TYPE_POD_APPROVED":               28,
+		"EVENT_TYPE_POD_REJECTED":               29,
 	}
 )
 
@@ -1944,7 +1959,7 @@ const file_karlo_notification_v1_notification_proto_rawDesc = "" +
 	"\x0eCHANNEL_IN_APP\x10\x01\x12\x10\n" +
 	"\fCHANNEL_PUSH\x10\x02\x12\x11\n" +
 	"\rCHANNEL_EMAIL\x10\x03\x12\x14\n" +
-	"\x10CHANNEL_WHATSAPP\x10\x04*\xf8\x06\n" +
+	"\x10CHANNEL_WHATSAPP\x10\x04*\xee\a\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18EVENT_TYPE_ORDER_CREATED\x10\x01\x12\x1c\n" +
@@ -1972,7 +1987,11 @@ const file_karlo_notification_v1_notification_proto_rawDesc = "" +
 	"\x18EVENT_TYPE_TASK_ASSIGNED\x10\x16\x12\x1b\n" +
 	"\x17EVENT_TYPE_CHAT_MESSAGE\x10\x17\x12\x12\n" +
 	"\x0eEVENT_TYPE_OTP\x10\x18\x12%\n" +
-	"!EVENT_TYPE_DRIVER_ACCOUNT_CREATED\x10\x192\xbd\a\n" +
+	"!EVENT_TYPE_DRIVER_ACCOUNT_CREATED\x10\x19\x12\x1c\n" +
+	"\x18EVENT_TYPE_HANDOVER_CODE\x10\x1a\x12\x1c\n" +
+	"\x18EVENT_TYPE_POD_SUBMITTED\x10\x1b\x12\x1b\n" +
+	"\x17EVENT_TYPE_POD_APPROVED\x10\x1c\x12\x1b\n" +
+	"\x17EVENT_TYPE_POD_REJECTED\x10\x1d2\xbd\a\n" +
 	"\x13NotificationService\x12U\n" +
 	"\x06Notify\x12$.karlo.notification.v1.NotifyRequest\x1a%.karlo.notification.v1.NotifyResponse\x12d\n" +
 	"\vNotifyBatch\x12).karlo.notification.v1.NotifyBatchRequest\x1a*.karlo.notification.v1.NotifyBatchResponse\x12v\n" +
