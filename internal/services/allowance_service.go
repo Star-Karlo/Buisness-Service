@@ -11,7 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/karlo/business-service/internal/clients"
 	"github.com/karlo/business-service/internal/models"
+	masterdatav1 "github.com/karlo/business-service/internal/platform/genproto/karlo/masterdata/v1"
 	"github.com/karlo/business-service/internal/repository"
 )
 
@@ -39,12 +41,16 @@ type AllowanceService struct {
 	orders     *repository.OrderRepository
 	allowances *repository.AllowanceRepository
 	routes     *repository.OrderRouteRepository
+	// masterdata resolves the assigned truck's type for its toll class; nil
+	// (tests) falls back to Golongan II.
+	masterdata *clients.MasterData
 }
 
 func NewAllowanceService(
 	orders *repository.OrderRepository,
 	allowances *repository.AllowanceRepository,
 	routes *repository.OrderRouteRepository,
+	masterdata *clients.MasterData,
 ) *AllowanceService {
 	return &AllowanceService{orders: orders, allowances: allowances, routes: routes}
 }
@@ -85,15 +91,39 @@ type Evidence struct {
 	TollDataComplete bool `json:"tollDataComplete"`
 }
 
-// golonganForOrder picks the toll class the tariff is read for: the
-// assigned truck's, from its type name, else Golongan II (a two-axle truck,
-// the commonest case). The class the driver actually pays at is what the
-// finalised allowance records.
-func golonganForOrder(order *models.Order) int {
-	if order == nil {
+// golonganForOrder picks the toll class the tariff is read for: the assigned
+// truck's, from its type's axle count or name, else Golongan II (a two-axle
+// truck, the commonest case). Mirrors golonganForTruck in the Allocate
+// screen so the planner's figure and the allowance agree. The class the
+// driver actually pays at is what the finalised allowance records.
+func (s *AllowanceService) golonganForOrder(ctx context.Context, order *models.Order) int {
+	if order == nil || order.TruckID == nil || s.masterdata == nil {
 		return 2
 	}
-	t := strings.ToLower(order.TruckTypeName)
+	truck, err := s.masterdata.GetTruck(ctx, *order.TruckID)
+	if err != nil || truck.GetTruckTypeId() == "" {
+		return 2
+	}
+	item, err := s.masterdata.GetCatalogItem(ctx, masterdatav1.CatalogKind_CATALOG_KIND_TRUCK_TYPE, truck.GetTruckTypeId(), truck.GetCompanyId())
+	if err != nil {
+		return 2
+	}
+	return golonganForTruckType(item.GetName(), item.GetAttributes().AsMap()["axle"])
+}
+
+// golonganForTruckType classes a truck type: its axle count when the
+// catalogue carries one, otherwise a reading of its name.
+func golonganForTruckType(name string, axle any) int {
+	if a, ok := axle.(float64); ok && a > 0 {
+		switch {
+		case a >= 5:
+			return 5
+		case a >= 3:
+			return int(a)
+		}
+		return 2
+	}
+	t := strings.ToLower(name)
 	switch {
 	case strings.Contains(t, "pickup"), strings.Contains(t, "van"):
 		return 1
@@ -167,7 +197,7 @@ func (s *AllowanceService) evidence(ctx context.Context, orderID uuid.UUID, orde
 		return Evidence{}, err
 	}
 
-	golongan := golonganForOrder(order)
+	golongan := s.golonganForOrder(ctx, order)
 	ev := Evidence{TollDataComplete: true, TollEstimateSource: "tariff", TollGolongan: golongan}
 	classKey := fmt.Sprintf("golongan_%d", golongan)
 	tariff := decimal.Zero // sum of gate-priced fares for the chosen class

@@ -156,6 +156,16 @@ func (m *MasterData) GetTruck(ctx context.Context, id string) (*masterdatav1.Tru
 	return resp.GetTruck(), nil
 }
 
+// GetCatalogItem resolves one catalogue entry (a truck type, brand, body …)
+// as the company sees it: platform-global entries plus its own.
+func (m *MasterData) GetCatalogItem(ctx context.Context, kind masterdatav1.CatalogKind, id, companyID string) (*masterdatav1.CatalogItem, error) {
+	resp, err := m.client.GetCatalogItem(ctx, &masterdatav1.GetCatalogItemRequest{Kind: kind, Id: id, CompanyId: companyID})
+	if err != nil {
+		return nil, fmt.Errorf("clients: get catalog item: %w", err)
+	}
+	return resp.GetItem(), nil
+}
+
 // GetWarehouse resolves a location, including its geofence radius.
 func (m *MasterData) GetWarehouse(ctx context.Context, id string) (*masterdatav1.Warehouse, error) {
 	resp, err := m.client.GetWarehouse(ctx, &masterdatav1.GetWarehouseRequest{Id: id})

@@ -204,7 +204,7 @@ func run() error {
 	billingService := services.NewBillingService(agreementRepo, invoiceRepo, orderRepo, authClient, notifier)
 	fieldConfigService := services.NewFieldConfigService(fieldConfigRepo)
 	dispatchService := services.NewDispatchService(orderRepo, orderRouteRepo, routeCache, masterDataClient, telemetryClient)
-	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo)
+	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo, masterDataClient)
 	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
 	trackingService := services.NewTrackingService(trackingLinkRepo, orderRepo, shipmentRepo, orderRouteRepo, authClient, masterDataClient, dispatchService)
 
