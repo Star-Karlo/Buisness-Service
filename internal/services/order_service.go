@@ -80,11 +80,17 @@ type OrderService struct {
 	// constructor is a cycle. Nil-checked at every use, so a deployment that
 	// has not wired it still creates orders — without their routes.
 	dispatch *DispatchService
+	// lifecycle decorates shipments with the handover and POD state.
+	lifecycle *ShipmentService
 }
 
 // WithDispatch attaches route planning. See the field comment for why this is
 // not a constructor argument.
 func (s *OrderService) WithDispatch(d *DispatchService) { s.dispatch = d }
+
+// WithLifecycle attaches the shipment service, for the driver-flow
+// checkpoints (OTP, PODs) the order list carries. Same shape as dispatch.
+func (s *OrderService) WithLifecycle(l *ShipmentService) { s.lifecycle = l }
 
 // WithFieldConfig attaches the per-company field check and item storage.
 func (s *OrderService) WithFieldConfig(f *FieldConfigService, items *repository.OrderItemRepository) {
@@ -620,6 +626,16 @@ func (s *OrderService) resolveNames(ctx context.Context, orders []models.Order) 
 			if sh, err := s.shipments.FindByOrder(ctx, orders[i].ID); err == nil && sh != nil {
 				orders[i].ShipmentStatusCode = sh.StatusCode
 				orders[i].ShipmentAcceptedAt = sh.AcceptedAt
+				orders[i].ShipmentLoadingCargoCheckedAt = sh.LoadingCargoCheckedAt
+				orders[i].ShipmentLoadingCargoMatches = sh.LoadingCargoMatches
+				orders[i].ShipmentUnloadingCargoCheckedAt = sh.UnloadingCargoCheckedAt
+				orders[i].ShipmentUnloadingCargoMatches = sh.UnloadingCargoMatches
+				if s.lifecycle != nil {
+					if d := s.lifecycle.Decorate(ctx, sh); d != nil {
+						orders[i].ShipmentHandoverVerified = d.HandoverVerified
+						orders[i].ShipmentPods = d.Pods
+					}
+				}
 			}
 		}
 		if id := orders[i].OriginWarehouseID; id != nil {

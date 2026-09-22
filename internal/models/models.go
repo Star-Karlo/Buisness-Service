@@ -344,6 +344,15 @@ type Order struct {
 	// the driver has taken the order. The driver app's Jadwal / Aktif tabs
 	// split on exactly that.
 	ShipmentAcceptedAt *time.Time `gorm:"-" json:"shipmentAcceptedAt,omitempty"`
+	// The driver-flow checkpoints the status alone does not show: the cargo
+	// checks at loading (driver) and unloading (PIC), the confirmed OTP, and
+	// the latest POD per stage. Read-only, filled with the shipment.
+	ShipmentLoadingCargoCheckedAt   *time.Time    `gorm:"-" json:"shipmentLoadingCargoCheckedAt,omitempty"`
+	ShipmentLoadingCargoMatches     *bool         `gorm:"-" json:"shipmentLoadingCargoMatches,omitempty"`
+	ShipmentUnloadingCargoCheckedAt *time.Time    `gorm:"-" json:"shipmentUnloadingCargoCheckedAt,omitempty"`
+	ShipmentUnloadingCargoMatches   *bool         `gorm:"-" json:"shipmentUnloadingCargoMatches,omitempty"`
+	ShipmentHandoverVerified        bool          `gorm:"-" json:"shipmentHandoverVerified,omitempty"`
+	ShipmentPods                    []ShipmentPod `gorm:"-" json:"shipmentPods,omitempty"`
 
 	CargoTypeID *string `gorm:"column:cargo_type_id" json:"cargoTypeId,omitempty"`
 	ItemTypeID  *string `gorm:"column:item_type_id" json:"itemTypeId,omitempty"`

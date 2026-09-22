@@ -37,6 +37,12 @@ func (s *ShipmentService) WithDriverFlow(h *repository.HandoverRepository, p *re
 	return s
 }
 
+// Decorate fills the read-only driver-flow fields on a shipment (the
+// latest POD per stage, whether the OTP was confirmed).
+func (s *ShipmentService) Decorate(ctx context.Context, shipment *models.Shipment) *models.Shipment {
+	return s.decorate(ctx, shipment)
+}
+
 // decorate fills the read-only driver-flow fields on a shipment.
 func (s *ShipmentService) decorate(ctx context.Context, shipment *models.Shipment) *models.Shipment {
 	if shipment == nil {

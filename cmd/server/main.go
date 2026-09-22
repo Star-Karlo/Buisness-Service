@@ -217,6 +217,7 @@ func run() error {
 	// needs the order repository, which the order service also owns — passing
 	// each into the other's constructor is a cycle.
 	orderService.WithDispatch(dispatchService)
+	orderService.WithLifecycle(shipmentService)
 
 	// The per-company field check. Attached to both create paths, so the
 	// configuration a company sets shapes what the SERVER demands and not only
