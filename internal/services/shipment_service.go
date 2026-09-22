@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,37 @@ type ShipmentService struct {
 	auth       *clients.Auth
 	masterdata *clients.MasterData
 	notifier   clients.Notifier
+	// handovers answers whether the unloading OTP was confirmed, which gates
+	// the driver's "start unloading". Nil skips the gate (tests).
+	handovers *repository.HandoverRepository
+	// pods fills Shipment.Pods on read, so the driver app sees the review
+	// state with the shipment. Nil leaves it empty (tests).
+	pods *repository.PodRepository
+}
+
+// WithDriverFlow wires the handover and POD registers in: the unloading
+// gate, and the read-time decoration of the shipment.
+func (s *ShipmentService) WithDriverFlow(h *repository.HandoverRepository, p *repository.PodRepository) *ShipmentService {
+	s.handovers, s.pods = h, p
+	return s
+}
+
+// decorate fills the read-only driver-flow fields on a shipment.
+func (s *ShipmentService) decorate(ctx context.Context, shipment *models.Shipment) *models.Shipment {
+	if shipment == nil {
+		return nil
+	}
+	if s.pods != nil {
+		if latest, err := s.pods.Latest(ctx, shipment.ID); err == nil {
+			shipment.Pods = latest
+		}
+	}
+	if s.handovers != nil {
+		if ok, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading"); err == nil {
+			shipment.HandoverVerified = ok
+		}
+	}
+	return shipment
 }
 
 func NewShipmentService(
@@ -86,7 +118,41 @@ func (s *ShipmentService) Advance(ctx context.Context, actor Actor, in AdvanceIn
 		return nil, err
 	}
 
-	if err := models.CanTransitionShipment(shipment.StatusCode, in.To, machineRole(actor, order)); err != nil {
+	// Starting to unload needs the PIC's code confirmed first (the driver
+	// flow's OTP page). The testing bypass and admins step past it.
+	if in.To == models.ShipmentUnloading && !actor.StatusBypass && actor.Role == models.RoleDriver {
+		if err := s.assertHandoverVerified(ctx, shipment.ID); err != nil {
+			return nil, err
+		}
+	}
+
+	return s.advance(ctx, actor, shipment, order, in, machineRole(actor, order))
+}
+
+// AdvanceBySystem takes a step the service itself decided on — the move an
+// approved POD triggers — on behalf of the reviewer who caused it. The role
+// check is RoleSystem's; the reviewer's own entitlement was checked by the
+// caller.
+func (s *ShipmentService) AdvanceBySystem(ctx context.Context, actor Actor, shipment *models.Shipment, order *models.Order, to string) (*models.Shipment, error) {
+	return s.advance(ctx, actor, shipment, order, AdvanceInput{ShipmentID: shipment.ID, To: to}, models.RoleSystem)
+}
+
+func (s *ShipmentService) assertHandoverVerified(ctx context.Context, shipmentID uuid.UUID) error {
+	if s.handovers == nil {
+		return nil
+	}
+	ok, err := s.handovers.IsVerified(ctx, shipmentID, "unloading")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: the receiving PIC's code has not been confirmed yet", ErrValidation)
+	}
+	return nil
+}
+
+func (s *ShipmentService) advance(ctx context.Context, actor Actor, shipment *models.Shipment, order *models.Order, in AdvanceInput, role string) (*models.Shipment, error) {
+	if err := models.CanTransitionShipment(shipment.StatusCode, in.To, role); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrTransition, err)
 	}
 
@@ -193,9 +259,11 @@ func (s *ShipmentService) recordArrival(ctx context.Context, in AdvanceInput, or
 		return nil
 	}
 
+	// The driver flow's arrival rule is "within 1 km of the warehouse"
+	// unless the warehouse sets its own radius.
 	radius := int(warehouse.GetGeofenceRadiusMeters())
 	if radius <= 0 {
-		radius = 200
+		radius = 1000
 	}
 
 	distance := haversineMeters(
@@ -296,7 +364,89 @@ func (s *ShipmentService) GetByOrder(ctx context.Context, actor Actor, orderID u
 	if _, err := s.orders.FindByID(ctx, actor.CompanyID, orderID); err != nil {
 		return nil, err
 	}
-	return s.shipments.FindByOrder(ctx, orderID)
+	shipment, err := s.shipments.FindByOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	return s.decorate(ctx, shipment), nil
+}
+
+// Accept records the driver's acceptance of the job — the swipe in the
+// driver app — and where they were when they took it. The shipment stays
+// "assigned"; the app moves it to toLoading once the truck is more than a
+// kilometre from this point.
+func (s *ShipmentService) Accept(ctx context.Context, actor Actor, shipmentID uuid.UUID, pos *Position) (*models.Shipment, error) {
+	shipment, err := s.shipments.FindByID(ctx, shipmentID)
+	if err != nil {
+		return nil, err
+	}
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, shipment.OrderID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: this shipment does not belong to your company", ErrForbidden)
+	}
+	if err := s.assertActorMayAdvance(actor, shipment, order); err != nil {
+		return nil, err
+	}
+	if shipment.StatusCode != models.ShipmentAssigned {
+		return nil, fmt.Errorf("%w: the shipment is already under way", ErrTransition)
+	}
+	if shipment.AcceptedAt != nil {
+		return shipment, nil
+	}
+	now := time.Now()
+	fields := map[string]interface{}{"accepted_at": now}
+	if pos != nil {
+		fields["accepted_latitude"] = pos.Latitude
+		fields["accepted_longitude"] = pos.Longitude
+	}
+	if err := s.shipments.UpdateFields(ctx, shipmentID, fields); err != nil {
+		return nil, err
+	}
+	shipment.AcceptedAt = &now
+	if pos != nil {
+		shipment.AcceptedLatitude, shipment.AcceptedLongitude = &pos.Latitude, &pos.Longitude
+	}
+	return shipment, nil
+}
+
+// CargoCheckInput is the "sesuai / tidak sesuai" answer for one stage.
+type CargoCheckInput struct {
+	Stage   string
+	Matches bool
+	Note    string
+	// Via names the surface the answer came from: "app", "console", "field".
+	Via string
+	// By is who answered; nil for the PIC on the field page (no account).
+	By *uuid.UUID
+}
+
+// RecordCargoCheck stores the cargo check for a stage. At loading it is the
+// driver's own answer, taken while loading; at unloading it is the receiving
+// PIC's, taken while unloading. Either may be re-answered until the stage's
+// POD is approved.
+func (s *ShipmentService) RecordCargoCheck(ctx context.Context, shipment *models.Shipment, in CargoCheckInput) error {
+	var prefix, wantStatus string
+	switch in.Stage {
+	case "loading":
+		prefix, wantStatus = "loading_cargo", models.ShipmentLoading
+	case "unloading":
+		prefix, wantStatus = "unloading_cargo", models.ShipmentUnloading
+	default:
+		return fmt.Errorf("%w: stage must be loading or unloading", ErrValidation)
+	}
+	if shipment.StatusCode != wantStatus {
+		return fmt.Errorf("%w: the cargo check for %s is taken while the shipment is %s, not %s", ErrTransition, in.Stage, wantStatus, shipment.StatusCode)
+	}
+	fields := map[string]interface{}{
+		prefix + "_matches":    in.Matches,
+		prefix + "_note":       strings.TrimSpace(in.Note),
+		prefix + "_checked_at": time.Now(),
+		prefix + "_checked_by": in.By,
+	}
+	if in.Stage == "unloading" {
+		fields["unloading_cargo_checked_via"] = in.Via
+	}
+	return s.shipments.UpdateFields(ctx, shipment.ID, fields)
 }
 
 // ActiveForDriver answers the telemetry service's correlation question.

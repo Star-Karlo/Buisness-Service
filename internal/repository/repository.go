@@ -353,6 +353,14 @@ func (r *ShipmentRepository) ApplyStatus(ctx context.Context, id uuid.UUID, from
 	return nil
 }
 
+// UpdateFields writes columns on a shipment without touching its status.
+func (r *ShipmentRepository) UpdateFields(ctx context.Context, id uuid.UUID, fields map[string]interface{}) error {
+	if err := r.db.WithContext(ctx).Model(&models.Shipment{}).Where("id = ?", id).Updates(fields).Error; err != nil {
+		return fmt.Errorf("repository: update shipment: %w", err)
+	}
+	return nil
+}
+
 // AddDocument attaches a POD or checklist.
 func (r *ShipmentRepository) AddDocument(ctx context.Context, doc *models.ShipmentDocument) error {
 	if err := r.db.WithContext(ctx).Create(doc).Error; err != nil {

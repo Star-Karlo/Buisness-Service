@@ -146,6 +146,7 @@ func run() error {
 	trackingLinkRepo := repository.NewTrackingLinkRepository(db)
 	allowanceRepo := repository.NewAllowanceRepository(db)
 	handoverRepo := repository.NewHandoverRepository(db)
+	podRepo := repository.NewPodRepository(db)
 	ledgerRepo := repository.NewLedgerRepository(db)
 
 	// Publish the configurable-field catalogue the code declares.
@@ -206,6 +207,9 @@ func run() error {
 	dispatchService := services.NewDispatchService(orderRepo, orderRouteRepo, routeCache, masterDataClient, telemetryClient)
 	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo, masterDataClient, routeCache)
 	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
+	shipmentService.WithDriverFlow(handoverRepo, podRepo)
+	podService := services.NewPodService(podRepo, shipmentRepo, orderRepo, shipmentService, notifier)
+	handoverService.WithDriverFlow(shipmentService, podRepo)
 	trackingService := services.NewTrackingService(trackingLinkRepo, orderRepo, shipmentRepo, orderRouteRepo, authClient, masterDataClient, dispatchService)
 
 	// The order service plans the haul route when an order is created. Injected
@@ -255,6 +259,7 @@ func run() error {
 		FieldConfig: handlers.NewFieldConfigHandler(fieldConfigService),
 		Allowance:   handlers.NewAllowanceHandler(allowanceService),
 		Handover:    handlers.NewHandoverHandler(handoverService),
+		Pod:         handlers.NewPodHandler(podService, shipmentService, handoverService),
 		Ledger:      handlers.NewLedgerHandler(ledgerRepo),
 		Tracking:    handlers.NewTrackingHandler(trackingService),
 	})

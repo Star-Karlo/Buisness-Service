@@ -44,6 +44,7 @@ type Deps struct {
 	Allowance   *handlers.AllowanceHandler
 	Ledger      *handlers.LedgerHandler
 	Handover    *handlers.HandoverHandler
+	Pod         *handlers.PodHandler
 	Tracking    *handlers.TrackingHandler
 }
 
@@ -92,6 +93,10 @@ func Setup(d Deps) *gin.Engine {
 	// "/orders/track/…" sits beside "/orders/:id" — gin routes the static
 	// segment first — so it needs no load-balancer rule of its own.
 	router.GET("/api/v1/orders/track/:token", d.Tracking.Public)
+	// The receiving PIC's field page: same rule, one shipment's cargo
+	// check by the token the handover message carried.
+	router.GET("/api/v1/shipments/field/:token", d.Pod.Field)
+	router.POST("/api/v1/shipments/field/:token/cargo-check", d.Pod.FieldCargoCheck)
 
 	api := router.Group("/api/v1")
 	api.Use(authctx.RequireAuthWithRevocations(d.Verifier, d.Remote, d.Revocations))
@@ -174,6 +179,14 @@ func Setup(d Deps) *gin.Engine {
 	// every driver sub-account enumerated it.
 	shipments.POST("/:id/handover", d.Handover.Issue)
 	shipments.POST("/:id/handover/verify", d.Handover.Verify)
+
+	// The driver flow: accept, cargo checks, POD submission and review. No
+	// module permission, as above; the services check who may do what.
+	shipments.POST("/:id/accept", d.Pod.Accept)
+	shipments.PUT("/:id/cargo-check", d.Pod.CargoCheck)
+	shipments.POST("/:id/pod", d.Pod.Submit)
+	shipments.GET("/:id/pod", d.Pod.List)
+	shipments.PUT("/:id/pod/:podId/review", d.Pod.Review)
 
 	// The console's Finance pages. Reading the books is the invoice reader's
 	// right; writing an account or a manual line is the invoice creator's.

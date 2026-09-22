@@ -405,11 +405,70 @@ type Shipment struct {
 	DistanceMeters *int   `json:"distanceMeters,omitempty"`
 	TollCost       *Money `gorm:"type:numeric(18,2)" json:"tollCost,omitempty"`
 
+	// The driver flow (K-Trip). Acceptance is the swipe that starts the job;
+	// "toLoading" follows when the truck has moved off from where it was
+	// accepted. The cargo checks gate the POD submissions: the driver's own
+	// at loading, the receiving PIC's at unloading.
+	AcceptedAt        *time.Time `json:"acceptedAt,omitempty"`
+	AcceptedLatitude  *float64   `gorm:"type:numeric(10,7)" json:"acceptedLatitude,omitempty"`
+	AcceptedLongitude *float64   `gorm:"type:numeric(10,7)" json:"acceptedLongitude,omitempty"`
+
+	LoadingCargoMatches   *bool      `json:"loadingCargoMatches,omitempty"`
+	LoadingCargoNote      *string    `json:"loadingCargoNote,omitempty"`
+	LoadingCargoCheckedAt *time.Time `json:"loadingCargoCheckedAt,omitempty"`
+	LoadingCargoCheckedBy *uuid.UUID `gorm:"type:uuid" json:"loadingCargoCheckedBy,omitempty"`
+
+	UnloadingCargoMatches    *bool      `json:"unloadingCargoMatches,omitempty"`
+	UnloadingCargoNote       *string    `json:"unloadingCargoNote,omitempty"`
+	UnloadingCargoCheckedAt  *time.Time `json:"unloadingCargoCheckedAt,omitempty"`
+	UnloadingCargoCheckedBy  *uuid.UUID `gorm:"type:uuid" json:"unloadingCargoCheckedBy,omitempty"`
+	UnloadingCargoCheckedVia *string    `json:"unloadingCargoCheckedVia,omitempty"`
+
+	// Pods is the latest submission per stage, filled on read for the driver
+	// app and the console so one call answers "what is the driver waiting
+	// on". Not a column.
+	Pods []ShipmentPod `gorm:"-" json:"pods,omitempty"`
+	// HandoverVerified says the unloading OTP has been confirmed. Not a column.
+	HandoverVerified bool `gorm:"-" json:"handoverVerified"`
+
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 func (Shipment) TableName() string { return "shipments" }
+
+// POD submission states.
+const (
+	PodSubmitted = "submitted"
+	PodApproved  = "approved"
+	PodRejected  = "rejected"
+)
+
+// ShipmentPod is one proof-of-delivery submission from the driver: the photos
+// for one stage, and what the reviewer made of them. Approval is what moves
+// the shipment past loading or unloading; a rejection sends the driver back
+// to the camera, and the refused submission stays on record.
+type ShipmentPod struct {
+	ID         uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	ShipmentID uuid.UUID `gorm:"type:uuid;not null" json:"shipmentId"`
+	Stage      string    `gorm:"not null" json:"stage"`
+
+	// Photos is [{docType, fileUrl}], docType one of suratJalan | muatan |
+	// pendukung; fileUrl is the storage key.
+	Photos JSONArray `gorm:"type:jsonb" json:"photos"`
+	Note   *string   `json:"note,omitempty"`
+
+	Status          string  `gorm:"not null" json:"status"`
+	RejectionReason *string `json:"rejectionReason,omitempty"`
+
+	SubmittedByUserID *uuid.UUID `gorm:"type:uuid" json:"submittedByUserId,omitempty"`
+	SubmittedAt       time.Time  `json:"submittedAt"`
+	ReviewedByUserID  *uuid.UUID `gorm:"type:uuid" json:"reviewedByUserId,omitempty"`
+	ReviewedAt        *time.Time `json:"reviewedAt,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+}
+
+func (ShipmentPod) TableName() string { return "shipment_pods" }
 
 func (s *Shipment) AfterFind(*gorm.DB) error {
 	s.Status = StatusLabel(DomainShipment, s.StatusCode)

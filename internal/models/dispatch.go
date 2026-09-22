@@ -255,6 +255,11 @@ type ShipmentHandover struct {
 	PICName     *string `gorm:"column:pic_name" json:"picName,omitempty"`
 	PICWhatsApp string  `gorm:"column:pic_whatsapp" json:"picWhatsapp"`
 
+	// FieldToken opens the PIC's field page for this handover (cargo check
+	// without an account). Serialised so the driver's screen can show the
+	// link; it is a credential for one shipment's cargo check, nothing more.
+	FieldToken *string `gorm:"column:field_token" json:"fieldToken,omitempty"`
+
 	// Never serialised. It is a short-lived, low-value credential, but it is
 	// still a credential, and a JSON tag here would put it in an API response.
 	CodeHash []byte `gorm:"column:code_hash" json:"-"`

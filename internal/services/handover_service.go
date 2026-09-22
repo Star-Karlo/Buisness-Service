@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math/big"
@@ -45,6 +46,17 @@ type HandoverService struct {
 	handovers *repository.HandoverRepository
 	dispatch  *DispatchService
 	notifier  clients.Notifier
+	// lifecycle takes the "start unloading" step once the code is confirmed
+	// and records the field cargo check; pods shows the field page the
+	// unloading POD's state. Both optional (tests).
+	lifecycle *ShipmentService
+	pods      *repository.PodRepository
+}
+
+// WithDriverFlow wires the shipment lifecycle and POD register in.
+func (s *HandoverService) WithDriverFlow(lifecycle *ShipmentService, pods *repository.PodRepository) *HandoverService {
+	s.lifecycle, s.pods = lifecycle, pods
+	return s
 }
 
 func NewHandoverService(
@@ -85,6 +97,15 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	}
 	sum := sha256.Sum256([]byte(code))
 
+	// The field token opens the PIC's cargo-check page. Issued with the
+	// code so the PIC has both from one message; 32 random bytes, like the
+	// tracking link.
+	rawToken := make([]byte, 32)
+	if _, err := rand.Read(rawToken); err != nil {
+		return nil, fmt.Errorf("handover: field token: %w", err)
+	}
+	fieldToken := base64.RawURLEncoding.EncodeToString(rawToken)
+
 	row := &models.ShipmentHandover{
 		ShipmentID:  shipmentID,
 		Stage:       "unloading",
@@ -93,6 +114,7 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 		MaxAttempts: 5,
 		SentAt:      time.Now(),
 		ExpiresAt:   time.Now().Add(handoverCodeTTL),
+		FieldToken:  &fieldToken,
 	}
 	if picName != "" {
 		row.PICName = &picName
@@ -112,6 +134,7 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 		Params: map[string]interface{}{
 			"code":       code,
 			"expiryMins": int(handoverCodeTTL.Minutes()),
+			"fieldToken": fieldToken,
 		},
 		IdempotencyKey: "handover:" + row.ID.String(),
 	})
@@ -173,7 +196,135 @@ func (s *HandoverService) Verify(ctx context.Context, actor Actor, shipmentID uu
 
 	live.VerifiedAt = ptrTime(time.Now())
 	live.VerifiedLat, live.VerifiedLon, live.VerifiedWithinGeofence = lat, lon, within
+
+	// The confirmed code is the driver flow's "start unloading": the swipe
+	// opened the OTP page, and the PIC's code closes it. Taken here so the
+	// app needs no second call; a shipment not at the gate (already
+	// unloading, say) is left as it is.
+	if s.lifecycle != nil && shipment.StatusCode == models.ShipmentAtUnloading {
+		if _, err := s.lifecycle.Advance(ctx, actor, AdvanceInput{ShipmentID: shipmentID, To: models.ShipmentUnloading, Position: positionOf(in)}); err != nil {
+			return nil, err
+		}
+	}
 	return live, nil
+}
+
+func positionOf(in VerifyInput) *Position {
+	if in.Latitude == nil || in.Longitude == nil {
+		return nil
+	}
+	return &Position{Latitude: *in.Latitude, Longitude: *in.Longitude}
+}
+
+// FieldView is what the PIC's field page shows: enough to know which truck
+// is at the gate and what it should be carrying, and where the check stands.
+type FieldView struct {
+	OrderNumber      string              `json:"orderNumber"`
+	ShipmentID       uuid.UUID           `json:"shipmentId"`
+	ShipmentStatus   string              `json:"shipmentStatus"`
+	PICName          *string             `json:"picName,omitempty"`
+	Truck            string              `json:"truck,omitempty"`
+	Driver           string              `json:"driver,omitempty"`
+	Destination      string              `json:"destination,omitempty"`
+	Cargo            map[string]any      `json:"cargo,omitempty"`
+	CargoCheck       *FieldCargoCheck    `json:"cargoCheck,omitempty"`
+	Pod              *models.ShipmentPod `json:"pod,omitempty"`
+	HandoverVerified bool                `json:"handoverVerified"`
+}
+
+type FieldCargoCheck struct {
+	Matches   bool      `json:"matches"`
+	Note      string    `json:"note,omitempty"`
+	CheckedAt time.Time `json:"checkedAt"`
+}
+
+// Field resolves the PIC's page by token.
+func (s *HandoverService) Field(ctx context.Context, token string) (*FieldView, error) {
+	row, err := s.handovers.FindByFieldToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	shipment, err := s.shipments.FindByID(ctx, row.ShipmentID)
+	if err != nil {
+		return nil, err
+	}
+	order, err := s.orders.FindByIDForService(ctx, shipment.OrderID)
+	if err != nil {
+		return nil, err
+	}
+	view := &FieldView{
+		OrderNumber:      order.OrderNumber,
+		ShipmentID:       shipment.ID,
+		ShipmentStatus:   shipment.StatusCode,
+		PICName:          row.PICName,
+		HandoverVerified: row.VerifiedAt != nil,
+	}
+	if shipment.TruckID != nil {
+		if t, err := s.dispatch.masterdata.GetTruck(ctx, *shipment.TruckID); err == nil {
+			view.Truck = t.GetPoliceNumber()
+		}
+	}
+	if shipment.DriverID != nil {
+		if d, err := s.dispatch.masterdata.GetDriver(ctx, *shipment.DriverID); err == nil {
+			view.Driver = d.GetFullName()
+		}
+	}
+	if order.DestinationWarehouseID != nil {
+		if wh, err := s.dispatch.Warehouse(ctx, *order.DestinationWarehouseID); err == nil {
+			view.Destination = wh.GetName()
+		}
+	}
+	if order.Detail != nil {
+		view.Cargo = map[string]any{}
+		for _, k := range []string{"cargoItems", "muatan", "totalBerat", "kuantitas", "totalVolume", "namaMuatan"} {
+			if v, ok := order.Detail[k]; ok {
+				view.Cargo[k] = v
+			}
+		}
+	}
+	if shipment.UnloadingCargoCheckedAt != nil && shipment.UnloadingCargoMatches != nil {
+		view.CargoCheck = &FieldCargoCheck{Matches: *shipment.UnloadingCargoMatches, CheckedAt: *shipment.UnloadingCargoCheckedAt}
+		if shipment.UnloadingCargoNote != nil {
+			view.CargoCheck.Note = *shipment.UnloadingCargoNote
+		}
+	}
+	if s.pods != nil {
+		if latest, err := s.pods.Latest(ctx, shipment.ID); err == nil {
+			for i := range latest {
+				if latest[i].Stage == "unloading" {
+					view.Pod = &latest[i]
+				}
+			}
+		}
+	}
+	return view, nil
+}
+
+// FieldCargoCheckIn is the PIC's answer on the field page.
+type FieldCargoCheckIn struct {
+	Matches bool
+	Note    string
+	PICName string
+}
+
+// RecordFieldCargoCheck stores the PIC's cargo check by token. The token is
+// the credential; the shipment must be unloading (the OTP was confirmed).
+func (s *HandoverService) RecordFieldCargoCheck(ctx context.Context, token string, in FieldCargoCheckIn) (*FieldView, error) {
+	row, err := s.handovers.FindByFieldToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	shipment, err := s.shipments.FindByID(ctx, row.ShipmentID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.lifecycle.RecordCargoCheck(ctx, shipment, CargoCheckInput{Stage: "unloading", Matches: in.Matches, Note: in.Note, Via: "field"}); err != nil {
+		return nil, err
+	}
+	if name := strings.TrimSpace(in.PICName); name != "" && (row.PICName == nil || *row.PICName == "") {
+		_ = s.handovers.SetPICName(ctx, row.ID, name)
+	}
+	return s.Field(ctx, token)
 }
 
 // geofenceCheck works out whether the driver was at the unloading point.

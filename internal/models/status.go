@@ -103,6 +103,9 @@ const (
 	RoleDriver       = "driver"
 	RoleManager      = "manager"
 	RoleWarehousePic = "warehousePic"
+	// RoleSystem is never a caller's role: it names moves the service makes
+	// on its own, such as the step an approved POD triggers.
+	RoleSystem = "system"
 )
 
 // Transition describes one legal move in a state machine.
@@ -209,8 +212,11 @@ var shipmentTransitions = map[string][]Transition{
 	ShipmentLoadingApproved: {
 		{To: ShipmentLoading, AllowedRoles: []string{RoleDriver}},
 	},
+	// Loading ends with a reviewed POD, not a driver's tap: the driver
+	// submits photos and the company's approval (or the testing bypass, or
+	// an admin) is what moves the shipment on. See PodService.Review.
 	ShipmentLoading: {
-		{To: ShipmentLoaded, AllowedRoles: []string{RoleDriver}},
+		{To: ShipmentLoaded, AllowedRoles: []string{RoleSystem, RoleAdmin, RoleSuperadmin}},
 	},
 	ShipmentLoaded: {
 		{To: ShipmentToUnloading, AllowedRoles: []string{RoleDriver}},
@@ -225,12 +231,14 @@ var shipmentTransitions = map[string][]Transition{
 	ShipmentUnloadingApproved: {
 		{To: ShipmentUnloading, AllowedRoles: []string{RoleDriver}},
 	},
+	// Same at unloading: the approved POD ends it.
 	ShipmentUnloading: {
-		{To: ShipmentUnloaded, AllowedRoles: []string{RoleDriver}},
+		{To: ShipmentUnloaded, AllowedRoles: []string{RoleSystem, RoleAdmin, RoleSuperadmin}},
 	},
 	ShipmentUnloaded: {
-		// The warehouse signs off, which completes the shipment.
-		{To: ShipmentFinished, AllowedRoles: []string{RoleWarehousePic, RoleAdmin, RoleSuperadmin}},
+		// The approved unloading POD is the sign-off; finishing follows it
+		// at once and completes the order.
+		{To: ShipmentFinished, AllowedRoles: []string{RoleSystem, RoleWarehousePic, RoleAdmin, RoleSuperadmin}},
 	},
 	ShipmentFinished:  {},
 	ShipmentCancelled: {},
