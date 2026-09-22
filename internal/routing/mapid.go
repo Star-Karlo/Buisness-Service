@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -107,6 +108,29 @@ type Route struct {
 
 	// TollSegments is populated only when it was asked for.
 	TollSegments []TollSegment `json:"tollSegments,omitempty"`
+
+	// Toll is the fare, from MAPID's route_n_toll API, when the route crosses
+	// a toll road and the lookup succeeded. Nil otherwise — a missing fare is
+	// "unknown", never zero.
+	Toll *Toll `json:"toll,omitempty"`
+}
+
+// Toll is what a journey costs at the gates, in rupiah, per vehicle class.
+type Toll struct {
+	// Prices per golongan, keyed "golongan_1" … "golongan_5".
+	Prices map[string]int64 `json:"prices"`
+	// Gates in travel order, each with its own price per golongan.
+	Gates []TollGate `json:"gates"`
+}
+
+// TollGate is one gate the route passes.
+type TollGate struct {
+	Name    string           `json:"name"`
+	Gate    string           `json:"gate,omitempty"` // in | out
+	Lon     float64          `json:"lon,omitempty"`
+	Lat     float64          `json:"lat,omitempty"`
+	Prices  map[string]int64 `json:"prices"`
+	Prepaid bool             `json:"prepaid,omitempty"`
 }
 
 // DurationSeconds is what a JSON client wants; a Go Duration marshals as
@@ -331,4 +355,76 @@ func firstLine(b []byte) string {
 		b = b[:max]
 	}
 	return string(bytes.TrimSpace(b))
+}
+
+// TollFor asks MAPID's route_n_toll API what a route costs at the gates.
+//
+// Called with the routed geometry — the fare depends on which gates the
+// line actually passes, so a straight line between the ends returns nothing.
+// Failure is returned, not hidden: the caller decides whether a route
+// without a fare is still useful (it is; the fare is a supplement).
+func (c *Client) TollFor(ctx context.Context, geometry [][]float64) (*Toll, error) {
+	if !c.Configured() {
+		return nil, ErrNotConfigured
+	}
+	if len(geometry) < 2 {
+		return nil, fmt.Errorf("routing: a toll lookup needs a routed line")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"route": map[string]any{"type": "LineString", "coordinates": geometry},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("routing: encode toll request: %w", err)
+	}
+	endpoint := strings.TrimSuffix(c.baseURL, "/") + "/v2/route_n_toll/rute?key=" + url.QueryEscape(c.key)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("routing: build toll request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("routing: MAPID toll unreachable: %w", err)
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("routing: read toll response: %w", readErr)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("routing: MAPID toll %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var body struct {
+		Prices  map[string]int64 `json:"prices"`
+		Details []struct {
+			From *struct {
+				Gate     string `json:"gate"`
+				Prepaid  bool   `json:"prepaid"`
+				Name     string `json:"name"`
+				Geometry *struct {
+					Coordinates []float64 `json:"coordinates"`
+				} `json:"geometry"`
+			} `json:"from"`
+			Price map[string]int64 `json:"price"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("routing: decode toll response: %w", err)
+	}
+	// No prices means no toll road on the line — that is an answer, not an error.
+	if len(body.Prices) == 0 {
+		return &Toll{Prices: map[string]int64{}, Gates: []TollGate{}}, nil
+	}
+	out := &Toll{Prices: body.Prices, Gates: make([]TollGate, 0, len(body.Details))}
+	for _, d := range body.Details {
+		g := TollGate{Prices: d.Price}
+		if d.From != nil {
+			g.Name, g.Gate, g.Prepaid = d.From.Name, d.From.Gate, d.From.Prepaid
+			if d.From.Geometry != nil && len(d.From.Geometry.Coordinates) == 2 {
+				g.Lon, g.Lat = d.From.Geometry.Coordinates[0], d.From.Geometry.Coordinates[1]
+			}
+		}
+		out.Gates = append(out.Gates, g)
+	}
+	return out, nil
 }

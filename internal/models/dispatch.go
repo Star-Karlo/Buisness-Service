@@ -126,6 +126,8 @@ type RouteCacheEntry struct {
 	// write.
 	BBox         JSONArray `gorm:"column:bbox;type:jsonb" json:"bbox,omitempty"`
 	TollSegments JSONArray `gorm:"column:toll_segments;type:jsonb" json:"tollSegments,omitempty"`
+	// Toll is the fare per golongan and per gate (routing.Toll), when known.
+	Toll JSONB `gorm:"column:toll;type:jsonb" json:"toll,omitempty"`
 
 	HasToll            bool `gorm:"column:has_toll" json:"hasToll"`
 	TollDistanceMeters int  `gorm:"column:toll_distance_meters" json:"tollDistanceMeters"`

@@ -237,6 +237,7 @@ func (r *RouteCacheRepository) Save(ctx context.Context, e *routing.Entry) error
 		Geometry:           toJSONArray(e.Route.Geometry),
 		BBox:               toJSONArray(e.Route.BBox),
 		TollSegments:       toJSONArray(e.Route.TollSegments),
+		Toll:               toJSONB(e.Route.Toll),
 		HasToll:            e.HasToll,
 		TollDistanceMeters: e.TollDistanceMeters,
 		ExpiresAt:          time.Now().Add(routing.CacheTTL),
@@ -249,7 +250,7 @@ func (r *RouteCacheRepository) Save(ctx context.Context, e *routing.Entry) error
 		Columns: []clause.Column{{Name: "cache_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"distance_meters", "duration_seconds", "geometry", "bbox",
-			"toll_segments", "has_toll", "toll_distance_meters", "expires_at",
+			"toll_segments", "toll", "has_toll", "toll_distance_meters", "expires_at",
 		}),
 	}).Create(&row).Error
 }
@@ -276,6 +277,14 @@ func entryFromRow(row models.RouteCacheEntry) (*routing.Entry, error) {
 	if err := remarshal(row.TollSegments, &route.TollSegments); err != nil {
 		return nil, err
 	}
+	if len(row.Toll) > 0 {
+		if raw, err := json.Marshal(row.Toll); err == nil {
+			var toll routing.Toll
+			if err := json.Unmarshal(raw, &toll); err == nil && len(toll.Prices) > 0 {
+				route.Toll = &toll
+			}
+		}
+	}
 
 	return &routing.Entry{
 		CacheKey: row.CacheKey, Profile: row.Profile, AvoidTolls: row.AvoidTolls,
@@ -298,6 +307,22 @@ func remarshal(src models.JSONArray, dst interface{}) error {
 		return err
 	}
 	return json.Unmarshal(raw, dst)
+}
+
+// toJSONB lands a struct (or nil) in a JSONB column; nil stays NULL.
+func toJSONB(v interface{}) models.JSONB {
+	if v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out models.JSONB
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 func toJSONArray(v interface{}) models.JSONArray {

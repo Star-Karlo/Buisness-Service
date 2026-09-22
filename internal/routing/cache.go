@@ -131,6 +131,17 @@ func (c *Cache) Route(ctx context.Context, req Request) (*Result, error) {
 
 	hasToll, tollMeters := tollSummary(route)
 
+	// The fare, from the toll API, once per route: it is cached with the
+	// route, so the gates are priced at planning time and never again. A
+	// failed lookup leaves Toll nil — the route is still good.
+	if hasToll {
+		if toll, err := c.client.TollFor(ctx, route.Geometry); err != nil {
+			slog.WarnContext(ctx, "toll fare lookup failed", "error", err, "key", key)
+		} else {
+			route.Toll = toll
+		}
+	}
+
 	entry := &Entry{
 		CacheKey: key, Profile: string(req.Profile), AvoidTolls: req.AvoidTolls,
 		Points: req.Points, Route: route,

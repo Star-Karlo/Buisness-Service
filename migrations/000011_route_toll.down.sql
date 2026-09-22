@@ -1,0 +1,1 @@
+ALTER TABLE route_cache DROP COLUMN IF EXISTS toll;

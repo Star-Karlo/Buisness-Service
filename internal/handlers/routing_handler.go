@@ -134,6 +134,7 @@ func (h *RoutingHandler) Plan(c *gin.Context) {
 		"geometry":        route.Geometry,
 		"bbox":            route.BBox,
 		"tollSegments":    route.TollSegments,
+		"toll":            route.Toll,
 		"hasToll":         result.HasToll,
 		// Whether this answer came from the cache rather than MAPID.
 		"cached": result.Cached,
