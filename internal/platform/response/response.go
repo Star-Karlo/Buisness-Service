@@ -39,6 +39,16 @@ func OKWithMessage(c *gin.Context, message string, data interface{}) {
 	c.JSON(http.StatusOK, successBody{Success: true, Message: message, Data: data})
 }
 
+// Accepted answers 202: taken in, processed on the far side.
+func Accepted(c *gin.Context, data interface{}) {
+	c.JSON(http.StatusAccepted, successBody{Success: true, Data: data})
+}
+
+// BadGateway answers 502: a service this one depends on refused or is down.
+func BadGateway(c *gin.Context, message string) {
+	c.AbortWithStatusJSON(http.StatusBadGateway, errorBody{Message: message})
+}
+
 func Created(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusCreated, successBody{Success: true, Data: data})
 }

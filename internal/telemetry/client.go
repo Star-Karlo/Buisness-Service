@@ -20,6 +20,7 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -243,6 +244,58 @@ func (c *Client) DailyStats(ctx context.Context, imeis []string, from, to time.T
 		return nil, err
 	}
 	return days, nil
+}
+
+// MobileReading is one phone fix, in the shape FMS's mobile ingest takes.
+// The driver is the identity: FMS joins it to the truck through the
+// driver's current assignment in master data.
+type MobileReading struct {
+	Driver       string         `json:"driver"`
+	Latitude     float64        `json:"latitude"`
+	Longitude    float64        `json:"longitude"`
+	Speed        *float64       `json:"speed,omitempty"`
+	Bearing      *float64       `json:"bearing,omitempty"`
+	Altitude     *float64       `json:"altitude,omitempty"`
+	BatteryLevel *float64       `json:"batteryLevel,omitempty"`
+	GpsCreatedAt string         `json:"gpsCreatedAt,omitempty"`
+	IO           map[string]any `json:"io,omitempty"`
+}
+
+// IngestMobile forwards a batch of phone fixes to FMS (POST
+// /v1/ingest/mobile) under the service token. Returns how many were stored.
+func (c *Client) IngestMobile(ctx context.Context, readings []MobileReading) (int, error) {
+	if !c.Configured() {
+		return 0, ErrNotConfigured
+	}
+	body, err := json.Marshal(readings)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/ingest/mobile", bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("telemetry: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	if c.key != "" {
+		req.Header.Set("X-Ingest-Key", c.key)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("telemetry: unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("telemetry: ingest returned %d: %s", resp.StatusCode, firstLine(raw))
+	}
+	var out struct {
+		Stored int `json:"stored"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out.Stored, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, into any) error {

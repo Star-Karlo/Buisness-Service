@@ -38,14 +38,15 @@ type Deps struct {
 	Billing  *handlers.BillingHandler
 	Routing  *handlers.RoutingHandler
 
-	Dispatch    *handlers.DispatchHandler
-	FieldConfig *handlers.FieldConfigHandler
-	Upload      *handlers.UploadHandler
-	Allowance   *handlers.AllowanceHandler
-	Ledger      *handlers.LedgerHandler
-	Handover    *handlers.HandoverHandler
-	Pod         *handlers.PodHandler
-	Tracking    *handlers.TrackingHandler
+	Dispatch        *handlers.DispatchHandler
+	FieldConfig     *handlers.FieldConfigHandler
+	Upload          *handlers.UploadHandler
+	Allowance       *handlers.AllowanceHandler
+	Ledger          *handlers.LedgerHandler
+	Handover        *handlers.HandoverHandler
+	Pod             *handlers.PodHandler
+	MobileTelemetry *handlers.MobileTelemetryHandler
+	Tracking        *handlers.TrackingHandler
 }
 
 func Setup(d Deps) *gin.Engine {
@@ -187,6 +188,9 @@ func Setup(d Deps) *gin.Engine {
 	shipments.POST("/:id/pod", d.Pod.Submit)
 	shipments.GET("/:id/pod", d.Pod.List)
 	shipments.PUT("/:id/pod/:podId/review", d.Pod.Review)
+
+	// The driver phone's positions, relayed to FMS under the service token.
+	api.POST("/telemetry/mobile", d.MobileTelemetry.Ingest)
 
 	// The console's Finance pages. Reading the books is the invoice reader's
 	// right; writing an account or a manual line is the invoice creator's.
