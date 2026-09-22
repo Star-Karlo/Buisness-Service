@@ -125,11 +125,18 @@ func (a *Agreement) AfterFind(*gorm.DB) error {
 	return nil
 }
 
-// IsUsable reports whether an order may be placed against this agreement now.
-// strictVerification reflects the ordering company's
-// active_agreement_verified_only setting.
-func (a *Agreement) IsUsable(now time.Time, strictVerification bool) bool {
-	return a.UnusableReason(now, strictVerification) == ""
+// IsUsable reports whether an order may be placed against this agreement
+// for a job on the day `on`. strictVerification reflects the ordering
+// company's active_agreement_verified_only setting.
+//
+// `on` is the order's load date, not the moment of booking. An agreement
+// that starts next week is the right contract for an order loading next
+// week, however early the planner books it — refusing until the start date
+// meant the first days of every new contract could not be planned. Judging
+// the load date keeps the other side too: a contract that starts after the
+// truck loads, or ends before, does not price the order.
+func (a *Agreement) IsUsable(on time.Time, strictVerification bool) bool {
+	return a.UnusableReason(on, strictVerification) == ""
 }
 
 // BusinessZone is the calendar the validity dates are read in. The console
@@ -143,10 +150,10 @@ var BusinessZone = func() *time.Location {
 	return time.FixedZone("WIB", 7*3600)
 }()
 
-// UnusableReason says why an order cannot be placed against this agreement
-// now, or "" when it can. The reason is the message the planner sees, so it
-// names the date rather than just refusing.
-func (a *Agreement) UnusableReason(now time.Time, strictVerification bool) string {
+// UnusableReason says why an order for the day `on` cannot be placed against
+// this agreement, or "" when it can. The reason is the message the planner
+// sees, so it names the date rather than just refusing.
+func (a *Agreement) UnusableReason(on time.Time, strictVerification bool) string {
 	if a.StatusCode != AgreementActive {
 		return "status " + StatusLabel(DomainAgreement, a.StatusCode) + " (bukan Aktif)"
 	}
@@ -154,21 +161,21 @@ func (a *Agreement) UnusableReason(now time.Time, strictVerification bool) strin
 		return "belum diverifikasi"
 	}
 	// Dates are inclusive at both ends, on the calendar day: an agreement
-	// valid until the 31st can still be used on the 31st.
+	// valid until the 31st can still be used for a load on the 31st.
 	day := func(t time.Time) time.Time {
 		y, m, d := t.In(BusinessZone).Date()
 		return time.Date(y, m, d, 0, 0, 0, 0, BusinessZone)
 	}
-	today := day(now)
+	loadDay := day(on)
 	// The stored instants are midnight UTC of the chosen date; read the
 	// date they name rather than the instant.
 	from := time.Date(a.ValidFrom.UTC().Year(), a.ValidFrom.UTC().Month(), a.ValidFrom.UTC().Day(), 0, 0, 0, 0, BusinessZone)
 	until := time.Date(a.ValidUntil.UTC().Year(), a.ValidUntil.UTC().Month(), a.ValidUntil.UTC().Day(), 0, 0, 0, 0, BusinessZone)
-	if today.Before(from) {
-		return "berlaku mulai " + from.Format("2 Jan 2006")
+	if loadDay.Before(from) {
+		return "berlaku mulai " + from.Format("2 Jan 2006") + ", tanggal muat " + loadDay.Format("2 Jan 2006")
 	}
-	if today.After(until) {
-		return "berakhir " + until.Format("2 Jan 2006")
+	if loadDay.After(until) {
+		return "berakhir " + until.Format("2 Jan 2006") + ", tanggal muat " + loadDay.Format("2 Jan 2006")
 	}
 	return ""
 }
@@ -332,6 +339,11 @@ type Order struct {
 	// The console derives its one displayed status from the order's own
 	// state plus this, so a list needs it without a call per row.
 	ShipmentStatusCode string `gorm:"-" json:"shipmentStatusCode,omitempty"`
+	// ShipmentAcceptedAt: accepting keeps the status at "assigned" (only the
+	// driver's movement changes it), so the status alone cannot say whether
+	// the driver has taken the order. The driver app's Jadwal / Aktif tabs
+	// split on exactly that.
+	ShipmentAcceptedAt *time.Time `gorm:"-" json:"shipmentAcceptedAt,omitempty"`
 
 	CargoTypeID *string `gorm:"column:cargo_type_id" json:"cargoTypeId,omitempty"`
 	ItemTypeID  *string `gorm:"column:item_type_id" json:"itemTypeId,omitempty"`

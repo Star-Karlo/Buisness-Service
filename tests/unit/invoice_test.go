@@ -99,7 +99,8 @@ func assertDecimal(t *testing.T, field string, got decimal.Decimal, want string)
 	}
 }
 
-// TestAgreementIsUsable covers the rules that gate placing an order.
+// TestAgreementIsUsable covers the rules that gate placing an order. The
+// time passed is the order's load date (see OrderService.applyAgreementPrice).
 func TestAgreementIsUsable(t *testing.T) {
 	day := func(s string) time.Time {
 		d, err := time.Parse("2006-01-02", s)
@@ -129,7 +130,10 @@ func TestAgreementIsUsable(t *testing.T) {
 		// can still be used on the 31st.
 		{"on the last day", nil, day("2026-12-31"), false, true},
 		{"the day after expiry", nil, day("2027-01-01"), false, false},
-		{"the day before it starts", nil, day("2025-12-31"), false, false},
+		// The day judged is the order's LOAD date, not the booking date: an
+		// order booked today for a load inside the term is fine however far
+		// ahead the contract starts, but a load before the start is refused.
+		{"load date the day before it starts", nil, day("2025-12-31"), false, false},
 		{"unverified under strict checking", nil, day("2026-06-15"), true, false},
 		{
 			"verified under strict checking",

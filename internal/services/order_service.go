@@ -345,7 +345,13 @@ func (s *OrderService) applyAgreementPrice(ctx context.Context, actor Actor, ord
 		return fmt.Errorf("resolve company settings: %w", err)
 	}
 
-	if reason := agreement.UnusableReason(time.Now(), settings.GetActiveAgreementVerifiedOnly()); reason != "" {
+	// Judged on the order's load date, not the booking date: an order for
+	// next week may be priced by next week's contract today.
+	on := time.Now()
+	if order.PickupAt != nil {
+		on = *order.PickupAt
+	}
+	if reason := agreement.UnusableReason(on, settings.GetActiveAgreementVerifiedOnly()); reason != "" {
 		return fmt.Errorf("%w: agreement %s tidak bisa dipakai untuk order baru: %s", ErrValidation, agreement.AgreementNumber, reason)
 	}
 
@@ -613,6 +619,7 @@ func (s *OrderService) resolveNames(ctx context.Context, orders []models.Order) 
 		if s.shipments != nil {
 			if sh, err := s.shipments.FindByOrder(ctx, orders[i].ID); err == nil && sh != nil {
 				orders[i].ShipmentStatusCode = sh.StatusCode
+				orders[i].ShipmentAcceptedAt = sh.AcceptedAt
 			}
 		}
 		if id := orders[i].OriginWarehouseID; id != nil {
