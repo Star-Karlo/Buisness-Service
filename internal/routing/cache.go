@@ -112,6 +112,7 @@ func (c *Cache) Route(ctx context.Context, req Request) (*Result, error) {
 	if entry, err := c.store.Lookup(ctx, key); err != nil {
 		slog.WarnContext(ctx, "route cache lookup failed, computing instead", "error", err)
 	} else if entry != nil {
+		c.priceIfMissing(ctx, entry)
 		return &Result{
 			Key: key, Route: entry.Route, Cached: true,
 			HasToll: entry.HasToll, TollDistanceMeters: entry.TollDistanceMeters,
@@ -155,6 +156,44 @@ func (c *Cache) Route(ctx context.Context, req Request) (*Result, error) {
 		Key: key, Route: route, Cached: false,
 		HasToll: hasToll, TollDistanceMeters: tollMeters,
 	}, nil
+}
+
+// priceIfMissing fetches the fare for a cached route that is tolled but was
+// stored before fares were kept, and saves it, so old plans pick up the
+// tariff on their next read without a re-route. A failed lookup is logged
+// and left for the next read.
+func (c *Cache) priceIfMissing(ctx context.Context, entry *Entry) {
+	if entry == nil || !entry.HasToll || entry.Route == nil || entry.Route.Toll != nil {
+		return
+	}
+	toll, err := c.client.TollFor(ctx, entry.Route.Geometry)
+	if err != nil {
+		slog.WarnContext(ctx, "toll fare backfill failed", "error", err, "key", entry.CacheKey)
+		return
+	}
+	if toll == nil {
+		return
+	}
+	entry.Route.Toll = toll
+	if err := c.store.Save(ctx, entry); err != nil {
+		slog.WarnContext(ctx, "route cache save failed", "error", err, "key", entry.CacheKey)
+	}
+}
+
+// Reprice prices the cached routes named by keys that are tolled but carry
+// no fare yet. It reports whether any entry changed, so the caller knows to
+// re-read its legs.
+func (c *Cache) Reprice(ctx context.Context, keys []string) bool {
+	changed := false
+	for _, key := range keys {
+		entry, err := c.store.Lookup(ctx, key)
+		if err != nil || entry == nil || !entry.HasToll || entry.Route == nil || entry.Route.Toll != nil {
+			continue
+		}
+		c.priceIfMissing(ctx, entry)
+		changed = changed || entry.Route.Toll != nil
+	}
+	return changed
 }
 
 // tollSummary works out how much of a route is tolled.

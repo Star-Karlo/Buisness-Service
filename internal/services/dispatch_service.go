@@ -415,7 +415,24 @@ func (s *DispatchService) Routes(ctx context.Context, actor Actor, orderID uuid.
 			return nil, err
 		}
 	}
+	if s.cache.Reprice(ctx, unpricedTollKeys(legs)) {
+		if legs, err = s.routes.ListByOrder(ctx, orderID); err != nil {
+			return nil, err
+		}
+	}
 	return legs, nil
+}
+
+// unpricedTollKeys lists the cache keys of legs that run on toll roads but
+// were planned before fares were stored with the route.
+func unpricedTollKeys(legs []models.OrderRoute) []string {
+	var keys []string
+	for _, l := range legs {
+		if l.Cache != nil && l.Cache.HasToll && l.Cache.Toll == nil {
+			keys = append(keys, l.CacheKey)
+		}
+	}
+	return keys
 }
 
 // truckPosition resolves one truck, live first.

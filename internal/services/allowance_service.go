@@ -15,6 +15,7 @@ import (
 	"github.com/karlo/business-service/internal/models"
 	masterdatav1 "github.com/karlo/business-service/internal/platform/genproto/karlo/masterdata/v1"
 	"github.com/karlo/business-service/internal/repository"
+	"github.com/karlo/business-service/internal/routing"
 )
 
 // TollRatePerKm is what a tolled kilometre is estimated at, in rupiah.
@@ -44,6 +45,8 @@ type AllowanceService struct {
 	// masterdata resolves the assigned truck's type for its toll class; nil
 	// (tests) falls back to Golongan II.
 	masterdata *clients.MasterData
+	// cache prices legs planned before fares were stored; nil skips that.
+	cache *routing.Cache
 }
 
 func NewAllowanceService(
@@ -51,8 +54,9 @@ func NewAllowanceService(
 	allowances *repository.AllowanceRepository,
 	routes *repository.OrderRouteRepository,
 	masterdata *clients.MasterData,
+	cache *routing.Cache,
 ) *AllowanceService {
-	return &AllowanceService{orders: orders, allowances: allowances, routes: routes}
+	return &AllowanceService{orders: orders, allowances: allowances, routes: routes, masterdata: masterdata, cache: cache}
 }
 
 // Evidence is what the system knows about the journey, for someone deciding the
@@ -195,6 +199,11 @@ func (s *AllowanceService) evidence(ctx context.Context, orderID uuid.UUID, orde
 	legs, err := s.routes.ListByOrder(ctx, orderID)
 	if err != nil {
 		return Evidence{}, err
+	}
+	if s.cache != nil && s.cache.Reprice(ctx, unpricedTollKeys(legs)) {
+		if legs, err = s.routes.ListByOrder(ctx, orderID); err != nil {
+			return Evidence{}, err
+		}
 	}
 
 	golongan := s.golonganForOrder(ctx, order)
