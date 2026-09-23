@@ -141,3 +141,28 @@ func TestCORSRejectsUnlistedOrigins(t *testing.T) {
 		t.Errorf("an unlisted origin was allowed: %q", allowed)
 	}
 }
+
+// Web-Field's public endpoints sit under /api/v1/shipments/ deliberately: that
+// prefix is the one the load balancer sends here, and a top-level /api/v1/field
+// reached the console instead. These two assertions are what a later tidy-up
+// would otherwise break silently — the symptom is an HTML 404 at the gate.
+func TestWebFieldRoutesAreRegistered(t *testing.T) {
+	router := buildRouter(t, "production")
+
+	// Public, and outside the auth middleware: a token too short to be real is
+	// refused by the handler's own guard, before any service call.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/shipments/field/session/short", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET a malformed Web-Field session = %d, want 404 (401 means it landed behind auth)", rec.Code)
+	}
+
+	// The signed-in PIC's inbox is behind auth, and must stay there.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/shipments/field/inbox", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET the Web-Field inbox without a token = %d, want 401", rec.Code)
+	}
+}

@@ -100,7 +100,13 @@ func Setup(d Deps) *gin.Engine {
 	// Lookup answers only for a truck that is actually at an unloading point,
 	// verify hands back the session token, and everything after that carries
 	// the token. See internal/handlers/field_handler.go.
-	field := router.Group("/api/v1/field")
+	//
+	// Under /shipments/, not a prefix of its own, for the reason the tracking
+	// route above gives: the load balancer routes /api/v1/shipments here
+	// already, and a new top-level path would reach the console instead until
+	// somebody added a rule for it. Gin prefers the literal "field" over the
+	// sibling ":id".
+	field := router.Group("/api/v1/shipments/field")
 	field.POST("/lookup", d.Field.Lookup)
 	field.POST("/verify", d.Field.Verify)
 	field.GET("/session/:token", d.Field.Session)
@@ -201,8 +207,8 @@ func Setup(d Deps) *gin.Engine {
 	// arriving at their own sites, and a verify that attributes the session to
 	// them. No module permission — being named a site's PIC in master data is
 	// the right, and the service checks it.
-	api.GET("/field/inbox", d.Field.Inbox)
-	api.POST("/field/open", d.Field.Verify)
+	shipments.GET("/field/inbox", d.Field.Inbox)
+	shipments.POST("/field/open", d.Field.Verify)
 
 	// The driver phone's positions, relayed to FMS under the service token.
 	api.POST("/telemetry/mobile", d.MobileTelemetry.Ingest)
