@@ -473,6 +473,23 @@ func statusBypassRequested(c *gin.Context, rawRole string, platformStaff bool) b
 
 // callerActor builds the Actor from the verified token. Company and user
 // identity come from the token and never from the request.
+// optionalActor resolves the caller when the route admits both signed-in and
+// anonymous callers, and says nothing when there is nobody. Web-Field's only
+// user of it: the same act by a signed-in PIC is attributable to a user, and
+// by a walk-up PIC to a name they type.
+func optionalActor(c *gin.Context) (services.Actor, bool) {
+	if _, ok := authctx.Gin(c); !ok {
+		return services.Actor{}, false
+	}
+	principal, _ := authctx.Gin(c)
+	userID, err := uuid.Parse(principal.UserID)
+	if err != nil {
+		return services.Actor{}, false
+	}
+	companyID, _ := uuid.Parse(principal.CompanyID)
+	return services.Actor{UserID: userID, CompanyID: companyID, Role: models.NormaliseRole(principal.Role())}, true
+}
+
 func callerActor(c *gin.Context) (services.Actor, bool) {
 	principal, ok := authctx.Gin(c)
 	if !ok {

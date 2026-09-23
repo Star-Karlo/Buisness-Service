@@ -109,6 +109,13 @@ enum EventType {
   EVENT_TYPE_POD_SUBMITTED = 27;
   EVENT_TYPE_POD_APPROVED = 28;
   EVENT_TYPE_POD_REJECTED = 29;
+  // Web-Field, the receiving PIC's audit. VERIFICATION_PENDING tells the
+  // warehouse a truck is at the gate and the driver holds the code;
+  // AUDIT_RECORDED and MANIFEST_FINALIZED tell the transporter what the PIC
+  // answered and that the manifest is closed.
+  EVENT_TYPE_FIELD_VERIFICATION_PENDING = 30;
+  EVENT_TYPE_FIELD_AUDIT_RECORDED = 31;
+  EVENT_TYPE_FIELD_MANIFEST_FINALIZED = 32;
 }
 
 // Audience states who should receive a notification. Exactly one field is set.

@@ -260,10 +260,11 @@ func run() error {
 		FieldConfig:     handlers.NewFieldConfigHandler(fieldConfigService),
 		Allowance:       handlers.NewAllowanceHandler(allowanceService),
 		Handover:        handlers.NewHandoverHandler(handoverService),
-		Pod:             handlers.NewPodHandler(podService, shipmentService, handoverService),
+		Pod:             handlers.NewPodHandler(podService, shipmentService),
 		MobileTelemetry: handlers.NewMobileTelemetryHandler(shipmentService, telemetryClient),
 		Ledger:          handlers.NewLedgerHandler(ledgerRepo),
 		Tracking:        handlers.NewTrackingHandler(trackingService),
+		Field:           handlers.NewFieldHandler(handoverService),
 	})
 
 	httpSrv := &http.Server{

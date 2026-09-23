@@ -34,12 +34,14 @@ const (
 	handoverCodeDigits = 6
 )
 
-// HandoverService issues and checks the code the receiving PIC gives the driver.
+// HandoverService issues the unloading code and checks both uses of it.
 //
-// This is the proof that a real person at the destination accepted the goods.
-// The driver enters the PIC's WhatsApp number, the code goes to that number,
-// and the driver types back what the PIC reads out — so what is demonstrated is
-// possession of that phone at that address, which a photograph cannot show.
+// The code goes to the DRIVER. The driver enters it in K-Trip to begin
+// unloading, and reads it out to the receiving PIC, who enters the same code
+// on Web-Field to open the audit. What that demonstrates is that the two
+// people were standing together at the gate — which is the thing a photograph
+// cannot show, and which a code mailed only to the warehouse never showed
+// either. See migrations/000013_webfield.up.sql.
 type HandoverService struct {
 	shipments *repository.ShipmentRepository
 	orders    *repository.OrderRepository
@@ -61,12 +63,16 @@ func (s *HandoverService) WithDriverFlow(lifecycle *ShipmentService, pods *repos
 	return s
 }
 
-// FieldURL is the PIC's page for a handover.
+// FieldURL is the PIC's Web-Field page for a handover.
+//
+// A deep link into the same page the PIC reaches by typing the order number,
+// carrying the session token so a PIC who was sent the link does not type it.
+// The code is still required before the token does anything.
 func (s *HandoverService) FieldURL(token string) string {
 	if s.consoleBaseURL == "" {
 		return ""
 	}
-	return s.consoleBaseURL + "/field/" + token
+	return s.consoleBaseURL + "/webfield?token=" + token
 }
 
 func NewHandoverService(
@@ -82,12 +88,19 @@ func NewHandoverService(
 	}
 }
 
-// Issue sends a code to the PIC's WhatsApp.
+// IssueResult is a freshly issued code.
 //
-// The code itself is never returned. Returning it — even to the driver who
-// asked — would defeat the entire mechanism, because the driver would then be
-// able to complete the handover without the PIC being involved at all.
-func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uuid.UUID, picName, picWhatsApp string) (*models.ShipmentHandover, error) {
+// The code IS returned here, to the driver who asked for it, because the
+// driver is now its recipient: they show it to the PIC. What is never
+// returned is a code to anyone else — the field endpoints hand back a token,
+// never digits.
+type IssueResult struct {
+	Handover *models.ShipmentHandover
+	Code     string
+}
+
+// Issue creates the unloading code and delivers it to the driver.
+func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uuid.UUID, picName, picWhatsApp string) (*IssueResult, error) {
 	shipment, err := s.shipments.FindByID(ctx, shipmentID)
 	if err != nil {
 		return nil, err
@@ -96,9 +109,14 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 		return nil, fmt.Errorf("%w: only the assigned driver may request a handover code", ErrForbidden)
 	}
 
-	number, err := normaliseWhatsApp(picWhatsApp)
-	if err != nil {
-		return nil, err
+	// The PIC's number is now optional: it addresses no code, only the
+	// courtesy message with the Web-Field link. An unreachable PIC can still
+	// walk up and type the order number.
+	number := ""
+	if strings.TrimSpace(picWhatsApp) != "" {
+		if number, err = normaliseWhatsApp(picWhatsApp); err != nil {
+			return nil, err
+		}
 	}
 
 	code, err := generateCode()
@@ -117,14 +135,15 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	fieldToken := base64.RawURLEncoding.EncodeToString(rawToken)
 
 	row := &models.ShipmentHandover{
-		ShipmentID:  shipmentID,
-		Stage:       "unloading",
-		PICWhatsApp: number,
-		CodeHash:    sum[:],
-		MaxAttempts: 5,
-		SentAt:      time.Now(),
-		ExpiresAt:   time.Now().Add(handoverCodeTTL),
-		FieldToken:  &fieldToken,
+		ShipmentID:    shipmentID,
+		Stage:         "unloading",
+		PICWhatsApp:   number,
+		CodeHash:      sum[:],
+		CodeRecipient: "driver",
+		MaxAttempts:   5,
+		SentAt:        time.Now(),
+		ExpiresAt:     time.Now().Add(handoverCodeTTL),
+		FieldToken:    &fieldToken,
 	}
 	if picName != "" {
 		row.PICName = &picName
@@ -137,24 +156,64 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	// Sent after the row is committed, not before. A code that was delivered
 	// but not stored can never be verified, which strands the driver at the
 	// gate; a code stored but not delivered is recoverable by asking again.
+	order, _ := s.orders.FindByIDForService(ctx, shipment.OrderID)
 	orderNumber := ""
-	if order, err := s.orders.FindByIDForService(ctx, shipment.OrderID); err == nil {
+	if order != nil {
 		orderNumber = order.OrderNumber
 	}
+	fieldURL := s.FieldURL(fieldToken)
+
+	// To the driver, addressed as a user: that reaches the phone through push
+	// and the app's own inbox as well as WhatsApp, so a driver whose WhatsApp
+	// is on another handset still has the code in front of them.
 	s.notifier.Notify(ctx, clients.Event{
 		Type:     notificationv1.EventType_EVENT_TYPE_HANDOVER_CODE,
 		Subject:  clients.Subject{ID: shipmentID.String(), Type: "shipment"},
-		Audience: clients.ToPhone(number),
+		Audience: clients.ToUsers(shipment.DriverUserID.String()),
 		Params: map[string]interface{}{
 			"orderNumber": orderNumber,
 			"code":        code,
 			"minutes":     int(handoverCodeTTL.Minutes()),
-			"fieldUrl":    s.FieldURL(fieldToken),
+			"fieldUrl":    fieldURL,
 		},
 		IdempotencyKey: "handover:" + row.ID.String(),
 	})
 
-	return row, nil
+	// To the warehouse, without the code: a truck is at your gate, ask the
+	// driver for the digits. Only to PICs who have an account — everyone else
+	// walks up to the driver, which is the flow the design draws.
+	s.notifyWarehousePICs(ctx, shipment, order, fieldURL, row.ID.String())
+
+	return &IssueResult{Handover: row, Code: code}, nil
+}
+
+// notifyWarehousePICs tells the receiving site's people that a truck is in.
+func (s *HandoverService) notifyWarehousePICs(ctx context.Context, shipment *models.Shipment, order *models.Order, fieldURL, handoverID string) {
+	if order == nil || order.DestinationWarehouseID == nil {
+		return
+	}
+	wh, err := s.dispatch.Warehouse(ctx, *order.DestinationWarehouseID)
+	if err != nil || len(wh.GetPicUserIds()) == 0 {
+		return
+	}
+	truck := ""
+	if shipment.TruckID != nil {
+		if t, err := s.dispatch.masterdata.GetTruck(ctx, *shipment.TruckID); err == nil {
+			truck = t.GetPoliceNumber()
+		}
+	}
+	s.notifier.Notify(ctx, clients.Event{
+		Type:     notificationv1.EventType_EVENT_TYPE_FIELD_VERIFICATION_PENDING,
+		Subject:  clients.Subject{ID: order.ID.String(), Type: "order"},
+		Audience: clients.ToUsers(wh.GetPicUserIds()...),
+		Params: map[string]interface{}{
+			"truck":       truck,
+			"warehouse":   wh.GetName(),
+			"orderNumber": order.OrderNumber,
+			"fieldUrl":    fieldURL,
+		},
+		IdempotencyKey: "field-pending:" + handoverID,
+	})
 }
 
 // VerifyInput is the driver's attempt.
@@ -242,17 +301,66 @@ func positionOf(in VerifyInput) *Position {
 // FieldView is what the PIC's field page shows: enough to know which truck
 // is at the gate and what it should be carrying, and where the check stands.
 type FieldView struct {
-	OrderNumber      string              `json:"orderNumber"`
-	ShipmentID       uuid.UUID           `json:"shipmentId"`
-	ShipmentStatus   string              `json:"shipmentStatus"`
-	PICName          *string             `json:"picName,omitempty"`
-	Truck            string              `json:"truck,omitempty"`
-	Driver           string              `json:"driver,omitempty"`
-	Destination      string              `json:"destination,omitempty"`
+	OrderNumber    string    `json:"orderNumber"`
+	ShipmentID     uuid.UUID `json:"shipmentId"`
+	ShipmentStatus string    `json:"shipmentStatus"`
+	PICName        *string   `json:"picName,omitempty"`
+	Truck          string    `json:"truck,omitempty"`
+	Driver         string    `json:"driver,omitempty"`
+	Destination    string    `json:"destination,omitempty"`
+
+	// The two ends of the journey as the PIC's order sheet shows them, with
+	// coordinates: the design puts them on the page because a PIC receiving
+	// for several sites needs to see which gate this is.
+	Origin           *FieldSite          `json:"origin,omitempty"`
+	Drop             *FieldSite          `json:"drop,omitempty"`
+	PickupAt         *time.Time          `json:"pickupAt,omitempty"`
+	ArrivedAt        *time.Time          `json:"arrivedAt,omitempty"`
 	Cargo            map[string]any      `json:"cargo,omitempty"`
 	CargoCheck       *FieldCargoCheck    `json:"cargoCheck,omitempty"`
 	Pod              *models.ShipmentPod `json:"pod,omitempty"`
 	HandoverVerified bool                `json:"handoverVerified"`
+
+	// Expected is what the order says should arrive; Actual is what the PIC
+	// counted. Kept apart so the audit shows a difference rather than
+	// replacing one figure with the other.
+	Expected *CargoFigures `json:"expected,omitempty"`
+	Actual   *CargoFigures `json:"actual,omitempty"`
+
+	FinalizedAt   *time.Time `json:"finalizedAt,omitempty"`
+	FinalizedBy   string     `json:"finalizedBy,omitempty"`
+	FinalizedNote string     `json:"finalizedNote,omitempty"`
+}
+
+// CargoFigures is one set of counts — ordered or received.
+type CargoFigures struct {
+	Name     string   `json:"name,omitempty"`
+	WeightKg *float64 `json:"weightKg,omitempty"`
+	VolumeM3 *float64 `json:"volumeM3,omitempty"`
+	Quantity *float64 `json:"quantity,omitempty"`
+}
+
+func money(v *models.Money) *float64 {
+	if v == nil {
+		return nil
+	}
+	f, _ := v.Float64()
+	return &f
+}
+
+func figures(f CargoFigures) *CargoFigures {
+	if f.WeightKg == nil && f.VolumeM3 == nil && f.Quantity == nil && f.Name == "" {
+		return nil
+	}
+	return &f
+}
+
+// FieldSite is one end of the journey.
+type FieldSite struct {
+	Name      string  `json:"name,omitempty"`
+	Address   string  `json:"address,omitempty"`
+	Latitude  float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
 }
 
 type FieldCargoCheck struct {
@@ -295,8 +403,15 @@ func (s *HandoverService) Field(ctx context.Context, token string) (*FieldView, 
 	if order.DestinationWarehouseID != nil {
 		if wh, err := s.dispatch.Warehouse(ctx, *order.DestinationWarehouseID); err == nil {
 			view.Destination = wh.GetName()
+			view.Drop = &FieldSite{Name: wh.GetName(), Address: wh.GetAddress(), Latitude: wh.GetLatitude(), Longitude: wh.GetLongitude()}
 		}
 	}
+	if order.OriginWarehouseID != nil {
+		if wh, err := s.dispatch.Warehouse(ctx, *order.OriginWarehouseID); err == nil {
+			view.Origin = &FieldSite{Name: wh.GetName(), Address: wh.GetAddress(), Latitude: wh.GetLatitude(), Longitude: wh.GetLongitude()}
+		}
+	}
+	view.PickupAt, view.ArrivedAt = order.PickupAt, shipment.ArrivedUnloadingAt
 	if order.Detail != nil {
 		view.Cargo = map[string]any{}
 		for _, k := range []string{"cargoItems", "muatan", "totalBerat", "kuantitas", "totalVolume", "namaMuatan"} {
@@ -311,6 +426,21 @@ func (s *HandoverService) Field(ctx context.Context, token string) (*FieldView, 
 			view.CargoCheck.Note = *shipment.UnloadingCargoNote
 		}
 	}
+	view.Expected = figures(CargoFigures{
+		WeightKg: money(order.WeightKg), VolumeM3: money(order.VolumeM3), Quantity: money(order.Quantity),
+	})
+	view.Actual = figures(CargoFigures{
+		WeightKg: money(shipment.UnloadingAuditWeightKg),
+		VolumeM3: money(shipment.UnloadingAuditVolumeM3),
+		Quantity: money(shipment.UnloadingAuditQuantity),
+	})
+	view.FinalizedAt = shipment.ManifestFinalizedAt
+	if shipment.ManifestFinalizedBy != nil {
+		view.FinalizedBy = *shipment.ManifestFinalizedBy
+	}
+	if shipment.ManifestFinalizedNote != nil {
+		view.FinalizedNote = *shipment.ManifestFinalizedNote
+	}
 	if s.pods != nil {
 		if latest, err := s.pods.Latest(ctx, shipment.ID); err == nil {
 			for i := range latest {
@@ -321,33 +451,6 @@ func (s *HandoverService) Field(ctx context.Context, token string) (*FieldView, 
 		}
 	}
 	return view, nil
-}
-
-// FieldCargoCheckIn is the PIC's answer on the field page.
-type FieldCargoCheckIn struct {
-	Matches bool
-	Note    string
-	PICName string
-}
-
-// RecordFieldCargoCheck stores the PIC's cargo check by token. The token is
-// the credential; the shipment must be unloading (the OTP was confirmed).
-func (s *HandoverService) RecordFieldCargoCheck(ctx context.Context, token string, in FieldCargoCheckIn) (*FieldView, error) {
-	row, err := s.handovers.FindByFieldToken(ctx, token)
-	if err != nil {
-		return nil, err
-	}
-	shipment, err := s.shipments.FindByID(ctx, row.ShipmentID)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.lifecycle.RecordCargoCheck(ctx, shipment, CargoCheckInput{Stage: "unloading", Matches: in.Matches, Note: in.Note, Via: "field"}); err != nil {
-		return nil, err
-	}
-	if name := strings.TrimSpace(in.PICName); name != "" && (row.PICName == nil || *row.PICName == "") {
-		_ = s.handovers.SetPICName(ctx, row.ID, name)
-	}
-	return s.Field(ctx, token)
 }
 
 // geofenceCheck works out whether the driver was at the unloading point.

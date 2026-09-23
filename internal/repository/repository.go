@@ -289,6 +289,60 @@ func (r *ShipmentRepository) FindByOrder(ctx context.Context, orderID uuid.UUID)
 	return one(&s, err)
 }
 
+// ListInboundForCompany returns the shipments heading for, or standing at, a
+// company's unloading points, each with its order.
+//
+// Web-Field's inbox. Two slices in step rather than a joined row struct
+// because the caller needs whole models — it reads the shipment's arrival
+// time and the order's destination — and re-fetching either per row is the
+// shape that made the legacy lists slow.
+func (r *ShipmentRepository) ListInboundForCompany(ctx context.Context, companyID uuid.UUID) ([]models.Shipment, []models.Order, error) {
+	var shipments []models.Shipment
+	err := r.db.WithContext(ctx).
+		Joins("JOIN orders o ON o.id = shipments.order_id").
+		// Either side of the order: the site may be registered by the
+		// shipper or, in MyWarehouse, by the transporter on its behalf.
+		Where("(o.shipper_company_id = ? OR o.transporter_company_id = ?) AND o.deleted_at IS NULL", companyID, companyID).
+		Where("shipments.status_code IN ?", []string{
+			models.ShipmentToUnloading, models.ShipmentAtUnloading,
+			models.ShipmentUnloading, models.ShipmentUnloaded,
+		}).
+		Order("shipments.updated_at DESC").
+		Limit(100).
+		Find(&shipments).Error
+	if err != nil {
+		return nil, nil, fmt.Errorf("repository: list inbound shipments: %w", err)
+	}
+	if len(shipments) == 0 {
+		return nil, nil, nil
+	}
+
+	ids := make([]uuid.UUID, 0, len(shipments))
+	for i := range shipments {
+		ids = append(ids, shipments[i].OrderID)
+	}
+	var rows []models.Order
+	if err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, nil, fmt.Errorf("repository: list inbound orders: %w", err)
+	}
+	byID := make(map[uuid.UUID]models.Order, len(rows))
+	for _, o := range rows {
+		byID[o.ID] = o
+	}
+
+	outS := make([]models.Shipment, 0, len(shipments))
+	outO := make([]models.Order, 0, len(shipments))
+	for i := range shipments {
+		o, ok := byID[shipments[i].OrderID]
+		if !ok {
+			continue
+		}
+		outS = append(outS, shipments[i])
+		outO = append(outO, o)
+	}
+	return outS, outO, nil
+}
+
 // ActiveShipment is a shipment in flight together with the order fields the
 // geofence watcher needs, read in one query rather than one per shipment.
 type ActiveShipment struct {

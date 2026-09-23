@@ -168,6 +168,41 @@ func (r *HandoverRepository) FindByFieldToken(ctx context.Context, token string)
 	return &row, err
 }
 
+// LatestForStage returns the most recent handover for a stage, verified or
+// not. FindLive answers the driver's question ("is there a code I can use");
+// this answers Web-Field's ("what code was issued for this delivery"), which
+// must still resolve after the driver has confirmed it.
+func (r *HandoverRepository) LatestForStage(ctx context.Context, shipmentID uuid.UUID, stage string) (*models.ShipmentHandover, error) {
+	var row models.ShipmentHandover
+	err := r.db.WithContext(ctx).
+		Where("shipment_id = ? AND stage = ?", shipmentID, stage).
+		Order("sent_at DESC").First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &row, err
+}
+
+// RecordFieldAttempt counts a wrong code typed on Web-Field, separately from
+// the driver's attempts: a PIC fumbling the digits must not use up the
+// driver's allowance, and vice versa.
+func (r *HandoverRepository) RecordFieldAttempt(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&models.ShipmentHandover{}).
+		Where("id = ?", id).
+		UpdateColumn("field_attempts", gorm.Expr("field_attempts + 1")).Error
+}
+
+// MarkFieldVerified opens the PIC's session. Repeatable: the PIC may close the
+// page and come back with the same code while the window is open.
+func (r *HandoverRepository) MarkFieldVerified(ctx context.Context, id uuid.UUID, picUserID *uuid.UUID) error {
+	fields := map[string]interface{}{"field_verified_at": time.Now()}
+	if picUserID != nil {
+		fields["field_pic_user_id"] = *picUserID
+	}
+	return r.db.WithContext(ctx).Model(&models.ShipmentHandover{}).
+		Where("id = ?", id).Updates(fields).Error
+}
+
 // SetPICName fills the PIC's name in when the field page learns it.
 func (r *HandoverRepository) SetPICName(ctx context.Context, id uuid.UUID, name string) error {
 	return r.db.WithContext(ctx).Model(&models.ShipmentHandover{}).Where("id = ?", id).UpdateColumn("pic_name", name).Error

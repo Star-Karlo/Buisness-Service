@@ -13,11 +13,10 @@ import (
 type PodHandler struct {
 	pods      *services.PodService
 	shipments *services.ShipmentService
-	handovers *services.HandoverService
 }
 
-func NewPodHandler(pods *services.PodService, shipments *services.ShipmentService, handovers *services.HandoverService) *PodHandler {
-	return &PodHandler{pods: pods, shipments: shipments, handovers: handovers}
+func NewPodHandler(pods *services.PodService, shipments *services.ShipmentService) *PodHandler {
+	return &PodHandler{pods: pods, shipments: shipments}
 }
 
 type acceptRequest struct {
@@ -192,57 +191,4 @@ func (h *PodHandler) Review(c *gin.Context) {
 		return
 	}
 	response.OK(c, pod)
-}
-
-// Field is the PIC's page, by token. Public: the token is the credential.
-//
-// @Summary  Field page for the receiving PIC (public, by token)
-// @Tags     Shipments
-// @Param    token path string true "Field token"
-// @Success  200 {object} services.FieldView
-// @Router   /shipments/field/{token} [get]
-func (h *PodHandler) Field(c *gin.Context) {
-	token := c.Param("token")
-	if len(token) < 16 || len(token) > 128 {
-		response.NotFound(c, "Link tidak ditemukan")
-		return
-	}
-	view, err := h.handovers.Field(c.Request.Context(), token)
-	if err != nil {
-		response.NotFound(c, "Link tidak ditemukan")
-		return
-	}
-	response.OK(c, view)
-}
-
-type fieldCargoCheckRequest struct {
-	Matches *bool  `json:"matches" binding:"required"`
-	Note    string `json:"note"`
-	PICName string `json:"picName"`
-}
-
-// FieldCargoCheck records the PIC's cargo check from the field page.
-//
-// @Summary  Record the PIC's cargo check (public, by token)
-// @Tags     Shipments
-// @Param    token path string true "Field token"
-// @Success  200 {object} services.FieldView
-// @Router   /shipments/field/{token}/cargo-check [post]
-func (h *PodHandler) FieldCargoCheck(c *gin.Context) {
-	token := c.Param("token")
-	if len(token) < 16 || len(token) > 128 {
-		response.NotFound(c, "Link tidak ditemukan")
-		return
-	}
-	var req fieldCargoCheckRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
-		return
-	}
-	view, err := h.handovers.RecordFieldCargoCheck(c.Request.Context(), token, services.FieldCargoCheckIn{Matches: *req.Matches, Note: req.Note, PICName: req.PICName})
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	response.OK(c, view)
 }

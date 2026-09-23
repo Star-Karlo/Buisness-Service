@@ -47,6 +47,7 @@ type Deps struct {
 	Pod             *handlers.PodHandler
 	MobileTelemetry *handlers.MobileTelemetryHandler
 	Tracking        *handlers.TrackingHandler
+	Field           *handlers.FieldHandler
 }
 
 func Setup(d Deps) *gin.Engine {
@@ -94,10 +95,17 @@ func Setup(d Deps) *gin.Engine {
 	// "/orders/track/…" sits beside "/orders/:id" — gin routes the static
 	// segment first — so it needs no load-balancer rule of its own.
 	router.GET("/api/v1/orders/track/:token", d.Tracking.Public)
-	// The receiving PIC's field page: same rule, one shipment's cargo
-	// check by the token the handover message carried.
-	router.GET("/api/v1/shipments/field/:token", d.Pod.Field)
-	router.POST("/api/v1/shipments/field/:token/cargo-check", d.Pod.FieldCargoCheck)
+	// Web-Field. Unauthenticated by design: the PIC at the gate has no
+	// account, and what stands in for one is the code on the driver's phone.
+	// Lookup answers only for a truck that is actually at an unloading point,
+	// verify hands back the session token, and everything after that carries
+	// the token. See internal/handlers/field_handler.go.
+	field := router.Group("/api/v1/field")
+	field.POST("/lookup", d.Field.Lookup)
+	field.POST("/verify", d.Field.Verify)
+	field.GET("/session/:token", d.Field.Session)
+	field.POST("/session/:token/audit", d.Field.Audit)
+	field.POST("/session/:token/finalize", d.Field.Finalize)
 
 	api := router.Group("/api/v1")
 	api.Use(authctx.RequireAuthWithRevocations(d.Verifier, d.Remote, d.Revocations))
@@ -188,6 +196,13 @@ func Setup(d Deps) *gin.Engine {
 	shipments.POST("/:id/pod", d.Pod.Submit)
 	shipments.GET("/:id/pod", d.Pod.List)
 	shipments.PUT("/:id/pod/:podId/review", d.Pod.Review)
+
+	// Web-Field for a PIC who does have an account: the inbox of deliveries
+	// arriving at their own sites, and a verify that attributes the session to
+	// them. No module permission — being named a site's PIC in master data is
+	// the right, and the service checks it.
+	api.GET("/field/inbox", d.Field.Inbox)
+	api.POST("/field/open", d.Field.Verify)
 
 	// The driver phone's positions, relayed to FMS under the service token.
 	api.POST("/telemetry/mobile", d.MobileTelemetry.Ingest)

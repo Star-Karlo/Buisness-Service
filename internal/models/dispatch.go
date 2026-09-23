@@ -271,6 +271,17 @@ type ShipmentHandover struct {
 	ExpiresAt  time.Time  `gorm:"column:expires_at" json:"expiresAt"`
 	VerifiedAt *time.Time `gorm:"column:verified_at" json:"verifiedAt,omitempty"`
 
+	// CodeRecipient is who the code was sent to: "driver" for everything
+	// issued since Web-Field, "pic" for the rows written before it.
+	CodeRecipient string `gorm:"column:code_recipient" json:"codeRecipient,omitempty"`
+
+	// FieldVerifiedAt is the PIC's use of the code on Web-Field, which is a
+	// separate act from VerifiedAt below — the driver's use of it in K-Trip.
+	// Both happen, driver first.
+	FieldVerifiedAt *time.Time `gorm:"column:field_verified_at" json:"fieldVerifiedAt,omitempty"`
+	FieldAttempts   int16      `gorm:"column:field_attempts" json:"fieldAttempts"`
+	FieldPICUserID  *uuid.UUID `gorm:"column:field_pic_user_id;type:uuid" json:"fieldPicUserId,omitempty"`
+
 	VerifiedLat            *Money `gorm:"column:verified_lat;type:numeric(10,7)" json:"verifiedLat,omitempty"`
 	VerifiedLon            *Money `gorm:"column:verified_lon;type:numeric(10,7)" json:"verifiedLon,omitempty"`
 	VerifiedWithinGeofence *bool  `gorm:"column:verified_within_geofence" json:"verifiedWithinGeofence,omitempty"`

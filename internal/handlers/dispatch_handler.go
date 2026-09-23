@@ -389,18 +389,20 @@ func NewHandoverHandler(h *services.HandoverService) *HandoverHandler {
 }
 
 type issueHandoverRequest struct {
-	PICName     string `json:"picName"`
-	PICWhatsapp string `json:"picWhatsapp" binding:"required"`
+	PICName string `json:"picName"`
+	// Optional since Web-Field: the PIC's number addresses the courtesy
+	// message with the field link, never the code.
+	PICWhatsapp string `json:"picWhatsapp"`
 }
 
-// Issue sends a code to the receiving PIC's WhatsApp.
+// Issue creates the unloading code and gives it to the driver.
 //
-// The response deliberately carries no code — only where it was sent and when
-// it expires. Returning the code to the driver who asked for it would let them
-// complete the handover without the PIC being involved, which is the one thing
-// this mechanism exists to prevent.
+// The code is in the response because the driver is its recipient: they enter
+// it in K-Trip and read it out to the PIC, who types it into Web-Field. It is
+// also pushed to the driver's phone, so a driver who closed the app still has
+// it.
 //
-// @Summary  Send a handover code to the receiving PIC
+// @Summary  Issue the unloading code to the driver
 // @Tags     Shipments
 // @Security BearerAuth
 // @Success  200 {object} response.Envelope
@@ -422,18 +424,22 @@ func (h *HandoverHandler) Issue(c *gin.Context) {
 		return
 	}
 
-	row, err := h.handovers.Issue(c.Request.Context(), actor, id, req.PICName, req.PICWhatsapp)
+	issued, err := h.handovers.Issue(c.Request.Context(), actor, id, req.PICName, req.PICWhatsapp)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
+	row := issued.Handover
 
 	out := gin.H{
-		"sentTo":    maskNumber(row.PICWhatsApp),
+		"code":      issued.Code,
 		"expiresAt": row.ExpiresAt,
 	}
-	// The Web-Field link, so the driver's screen can show it to a PIC whose
-	// WhatsApp did not get through. It opens the cargo check, never the code.
+	if row.PICWhatsApp != "" {
+		out["picNotified"] = maskNumber(row.PICWhatsApp)
+	}
+	// The Web-Field link and the order number, so the driver's screen can show
+	// the PIC how to reach the page without typing anything.
 	if row.FieldToken != nil {
 		out["fieldToken"] = *row.FieldToken
 		out["fieldUrl"] = h.handovers.FieldURL(*row.FieldToken)

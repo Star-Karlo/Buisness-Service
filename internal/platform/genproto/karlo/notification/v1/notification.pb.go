@@ -123,6 +123,13 @@ const (
 	EventType_EVENT_TYPE_POD_SUBMITTED EventType = 27
 	EventType_EVENT_TYPE_POD_APPROVED  EventType = 28
 	EventType_EVENT_TYPE_POD_REJECTED  EventType = 29
+	// Web-Field, the receiving PIC's audit. VERIFICATION_PENDING tells the
+	// warehouse a truck is at the gate and the driver holds the code;
+	// AUDIT_RECORDED and MANIFEST_FINALIZED tell the transporter what the PIC
+	// answered and that the manifest is closed.
+	EventType_EVENT_TYPE_FIELD_VERIFICATION_PENDING EventType = 30
+	EventType_EVENT_TYPE_FIELD_AUDIT_RECORDED       EventType = 31
+	EventType_EVENT_TYPE_FIELD_MANIFEST_FINALIZED   EventType = 32
 )
 
 // Enum value maps for EventType.
@@ -158,6 +165,9 @@ var (
 		27: "EVENT_TYPE_POD_SUBMITTED",
 		28: "EVENT_TYPE_POD_APPROVED",
 		29: "EVENT_TYPE_POD_REJECTED",
+		30: "EVENT_TYPE_FIELD_VERIFICATION_PENDING",
+		31: "EVENT_TYPE_FIELD_AUDIT_RECORDED",
+		32: "EVENT_TYPE_FIELD_MANIFEST_FINALIZED",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":                0,
@@ -190,6 +200,9 @@ var (
 		"EVENT_TYPE_POD_SUBMITTED":              27,
 		"EVENT_TYPE_POD_APPROVED":               28,
 		"EVENT_TYPE_POD_REJECTED":               29,
+		"EVENT_TYPE_FIELD_VERIFICATION_PENDING": 30,
+		"EVENT_TYPE_FIELD_AUDIT_RECORDED":       31,
+		"EVENT_TYPE_FIELD_MANIFEST_FINALIZED":   32,
 	}
 )
 
@@ -1959,7 +1972,7 @@ const file_karlo_notification_v1_notification_proto_rawDesc = "" +
 	"\x0eCHANNEL_IN_APP\x10\x01\x12\x10\n" +
 	"\fCHANNEL_PUSH\x10\x02\x12\x11\n" +
 	"\rCHANNEL_EMAIL\x10\x03\x12\x14\n" +
-	"\x10CHANNEL_WHATSAPP\x10\x04*\xee\a\n" +
+	"\x10CHANNEL_WHATSAPP\x10\x04*\xe7\b\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18EVENT_TYPE_ORDER_CREATED\x10\x01\x12\x1c\n" +
@@ -1991,7 +2004,10 @@ const file_karlo_notification_v1_notification_proto_rawDesc = "" +
 	"\x18EVENT_TYPE_HANDOVER_CODE\x10\x1a\x12\x1c\n" +
 	"\x18EVENT_TYPE_POD_SUBMITTED\x10\x1b\x12\x1b\n" +
 	"\x17EVENT_TYPE_POD_APPROVED\x10\x1c\x12\x1b\n" +
-	"\x17EVENT_TYPE_POD_REJECTED\x10\x1d2\xbd\a\n" +
+	"\x17EVENT_TYPE_POD_REJECTED\x10\x1d\x12)\n" +
+	"%EVENT_TYPE_FIELD_VERIFICATION_PENDING\x10\x1e\x12#\n" +
+	"\x1fEVENT_TYPE_FIELD_AUDIT_RECORDED\x10\x1f\x12'\n" +
+	"#EVENT_TYPE_FIELD_MANIFEST_FINALIZED\x10 2\xbd\a\n" +
 	"\x13NotificationService\x12U\n" +
 	"\x06Notify\x12$.karlo.notification.v1.NotifyRequest\x1a%.karlo.notification.v1.NotifyResponse\x12d\n" +
 	"\vNotifyBatch\x12).karlo.notification.v1.NotifyBatchRequest\x1a*.karlo.notification.v1.NotifyBatchResponse\x12v\n" +

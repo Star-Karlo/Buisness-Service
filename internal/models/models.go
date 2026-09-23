@@ -478,6 +478,20 @@ type Shipment struct {
 	UnloadingCargoCheckedBy  *uuid.UUID `gorm:"type:uuid" json:"unloadingCargoCheckedBy,omitempty"`
 	UnloadingCargoCheckedVia *string    `json:"unloadingCargoCheckedVia,omitempty"`
 
+	// What the PIC actually counted at the gate, beside the ordered figures.
+	// Nil where the PIC answered without counting; an absent figure is
+	// honest, a figure copied from the order is not.
+	UnloadingAuditWeightKg *Money `gorm:"column:unloading_audit_weight_kg;type:numeric(12,2)" json:"unloadingAuditWeightKg,omitempty"`
+	UnloadingAuditVolumeM3 *Money `gorm:"column:unloading_audit_volume_m3;type:numeric(12,2)" json:"unloadingAuditVolumeM3,omitempty"`
+	UnloadingAuditQuantity *Money `gorm:"column:unloading_audit_quantity;type:numeric(12,2)" json:"unloadingAuditQuantity,omitempty"`
+
+	// Finalising closes the count. The PIC cannot reopen it from Web-Field;
+	// the console can still reject the POD, which is the paperwork, not the
+	// count.
+	ManifestFinalizedAt   *time.Time `gorm:"column:manifest_finalized_at" json:"manifestFinalizedAt,omitempty"`
+	ManifestFinalizedBy   *string    `gorm:"column:manifest_finalized_by" json:"manifestFinalizedBy,omitempty"`
+	ManifestFinalizedNote *string    `gorm:"column:manifest_finalized_note" json:"manifestFinalizedNote,omitempty"`
+
 	// Pods is the latest submission per stage, filled on read for the driver
 	// app and the console so one call answers "what is the driver waiting
 	// on". Not a column.
