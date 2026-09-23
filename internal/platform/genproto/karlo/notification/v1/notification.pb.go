@@ -116,9 +116,10 @@ const (
 	// link and their credentials on WhatsApp. No in-app copy — there is no
 	// inbox yet to put it in.
 	EventType_EVENT_TYPE_DRIVER_ACCOUNT_CREATED EventType = 25
-	// The driver flow. HANDOVER_CODE goes to the receiving PIC on WhatsApp with
-	// the OTP and the Web-Field link; POD_SUBMITTED to the reviewers; the
-	// review's outcome to the driver as a push.
+	// The driver flow. HANDOVER_CODE goes to the DRIVER — on WhatsApp, as a push
+	// and to their in-app inbox — with the code and the Web-Field link: the
+	// driver enters it in K-Trip and reads it out to the receiving PIC.
+	// POD_SUBMITTED goes to the reviewers; the review's outcome to the driver.
 	EventType_EVENT_TYPE_HANDOVER_CODE EventType = 26
 	EventType_EVENT_TYPE_POD_SUBMITTED EventType = 27
 	EventType_EVENT_TYPE_POD_APPROVED  EventType = 28
