@@ -10,12 +10,15 @@ import (
 
 // FieldHandler serves Web-Field: the receiving PIC's own screens.
 //
-// Four of the five endpoints are unauthenticated, like the public tracking
+// Five of its seven endpoints are unauthenticated, like the public tracking
 // page. What stands in for an account is the code the driver holds: the order
 // number gets you a lookup, the code gets you a session token, and the token
-// is what every later call carries. A signed-in PIC gets one extra endpoint,
-// the inbox, which saves them typing an order number and buys them nothing
-// else — opening a delivery still needs the driver's code.
+// is what every later call carries. A signed-in PIC gets two more — the inbox
+// and an attributed verify — which save them typing an order number and buy
+// them nothing else: opening a delivery still needs the driver's code.
+//
+// They are registered under /shipments/ because that is the prefix the load
+// balancer routes here; see the group in internal/routes/routes.go.
 type FieldHandler struct {
 	handovers *services.HandoverService
 }
@@ -33,16 +36,21 @@ type fieldLookupRequest struct {
 // @Summary  Look up an order for Web-Field (public)
 // @Tags     Web-Field
 // @Success  200 {object} services.FieldLookup
-// @Router   /field/lookup [post]
+// @Router   /shipments/field/lookup [post]
 func (h *FieldHandler) Lookup(c *gin.Context) {
 	var req fieldLookupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		response.BadRequest(c, "Masukkan nomor order yang tertera pada surat jalan.")
 		return
 	}
 	out, err := h.handovers.FieldLookup(c.Request.Context(), req.OrderNumber)
 	if err != nil {
-		writeError(c, err)
+		// The generic mapping answers "Not found", in English, to somebody
+		// standing at a gate holding a piece of paper. Say what to do instead
+		// — and say the same thing whether the order is unknown or simply not
+		// at an unloading point, which is what keeps the endpoint from
+		// answering questions about other people's orders.
+		response.NotFound(c, "Nomor order tidak ditemukan, atau truk belum sampai di titik bongkar.")
 		return
 	}
 	response.OK(c, out)
@@ -58,11 +66,14 @@ type fieldVerifyRequest struct {
 // @Summary  Verify the driver's code (public)
 // @Tags     Web-Field
 // @Success  200 {object} response.Envelope
-// @Router   /field/verify [post]
+// @Router   /shipments/field/verify [post]
 func (h *FieldHandler) Verify(c *gin.Context) {
 	var req fieldVerifyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		// Not the binder's own wording: "Field validation for 'Code' failed on
+		// the 'required' tag" is a sentence for a developer, and this endpoint
+		// answers a warehouse.
+		response.BadRequest(c, "Masukkan nomor order dan 6 digit Kode OTP dari driver.")
 		return
 	}
 
@@ -87,7 +98,7 @@ func (h *FieldHandler) Verify(c *gin.Context) {
 // @Summary  Read a Web-Field session (public, by token)
 // @Tags     Web-Field
 // @Success  200 {object} services.FieldView
-// @Router   /field/session/{token} [get]
+// @Router   /shipments/field/session/{token} [get]
 func (h *FieldHandler) Session(c *gin.Context) {
 	token, ok := fieldToken(c)
 	if !ok {
@@ -115,7 +126,7 @@ type fieldAuditRequest struct {
 // @Summary  Record the PIC's audit (public, by token)
 // @Tags     Web-Field
 // @Success  200 {object} services.FieldView
-// @Router   /field/session/{token}/audit [post]
+// @Router   /shipments/field/session/{token}/audit [post]
 func (h *FieldHandler) Audit(c *gin.Context) {
 	token, ok := fieldToken(c)
 	if !ok {
@@ -123,7 +134,7 @@ func (h *FieldHandler) Audit(c *gin.Context) {
 	}
 	var req fieldAuditRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		response.BadRequest(c, "Pilih hasil audit: data sesuai atau tidak sesuai.")
 		return
 	}
 	view, err := h.handovers.RecordFieldAudit(c.Request.Context(), token, services.FieldAuditIn{
@@ -147,7 +158,7 @@ type fieldFinalizeRequest struct {
 // @Summary  Finalise the manifest (public, by token)
 // @Tags     Web-Field
 // @Success  200 {object} services.FieldView
-// @Router   /field/session/{token}/finalize [post]
+// @Router   /shipments/field/session/{token}/finalize [post]
 func (h *FieldHandler) Finalize(c *gin.Context) {
 	token, ok := fieldToken(c)
 	if !ok {
@@ -171,7 +182,7 @@ func (h *FieldHandler) Finalize(c *gin.Context) {
 // @Tags     Web-Field
 // @Security BearerAuth
 // @Success  200 {array} services.FieldInboxRow
-// @Router   /field/inbox [get]
+// @Router   /shipments/field/inbox [get]
 func (h *FieldHandler) Inbox(c *gin.Context) {
 	actor, ok := callerActor(c)
 	if !ok {
