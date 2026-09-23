@@ -306,6 +306,15 @@ func (s *OrderService) validateCreate(ctx context.Context, actor Actor, in Creat
 		}
 	}
 
+	// A load time already past is not a schedule: the order would be late
+	// the moment it is saved, and the agreement, the allowance and the
+	// driver's own plan are all read off this time. A minute of slack covers
+	// the gap between filling the form and pressing save.
+	if in.PickupAt != nil && in.PickupAt.Before(time.Now().Add(-time.Minute)) {
+		return fmt.Errorf("%w: jadwal muat %s sudah lewat — pilih waktu yang belum berlalu",
+			ErrValidation, in.PickupAt.In(models.BusinessZone).Format("2 Jan 2006 15:04"))
+	}
+
 	if in.PickupAt != nil && in.DeliveryAt != nil && in.DeliveryAt.Before(*in.PickupAt) {
 		return fmt.Errorf("%w: delivery cannot be before pickup", ErrValidation)
 	}
