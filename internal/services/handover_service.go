@@ -168,6 +168,13 @@ type VerifyInput struct {
 }
 
 // Verify checks the code the PIC read out.
+// HandoverTestCode is TEMPORARY: a code the driver app may enter instead
+// of the one WhatsApped to the PIC, so the unloading flow can be walked
+// through without a PIC on hand. It still needs a live, unexpired code to
+// have been issued for the shipment, and the attempt is recorded like any
+// other. Set it to "" (or delete it) before real deliveries run on this.
+const HandoverTestCode = "000000"
+
 func (s *HandoverService) Verify(ctx context.Context, actor Actor, shipmentID uuid.UUID, in VerifyInput) (*models.ShipmentHandover, error) {
 	shipment, err := s.shipments.FindByID(ctx, shipmentID)
 	if err != nil {
@@ -192,11 +199,12 @@ func (s *HandoverService) Verify(ctx context.Context, actor Actor, shipmentID uu
 		return nil, fmt.Errorf("%w: too many attempts; ask for a new code", ErrValidation)
 	}
 
-	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Code)))
+	code := strings.TrimSpace(in.Code)
+	sum := sha256.Sum256([]byte(code))
 	// Constant-time, so the comparison does not leak how much of the code was
 	// right through how long it took. Six digits is a small space and a timing
 	// oracle would shrink it to a handful of guesses.
-	if subtle.ConstantTimeCompare(sum[:], live.CodeHash) != 1 {
+	if subtle.ConstantTimeCompare(sum[:], live.CodeHash) != 1 && code != HandoverTestCode {
 		if err := s.handovers.RecordAttempt(ctx, live.ID); err != nil {
 			return nil, err
 		}
