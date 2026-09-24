@@ -390,6 +390,10 @@ type FieldView struct {
 	CargoCheck       *FieldCargoCheck    `json:"cargoCheck,omitempty"`
 	Pod              *models.ShipmentPod `json:"pod,omitempty"`
 	HandoverVerified bool                `json:"handoverVerified"`
+	// SessionVerified says the code has been entered on this page, which is
+	// what the audit endpoints require. Reported so the page can ask for the
+	// code up front instead of drawing buttons that will be refused.
+	SessionVerified bool `json:"sessionVerified"`
 
 	// Expected is what the order says should arrive; Actual is what the PIC
 	// counted. Kept apart so the audit shows a difference rather than
@@ -459,6 +463,7 @@ func (s *HandoverService) Field(ctx context.Context, token string) (*FieldView, 
 		ShipmentStatus:   shipment.StatusCode,
 		PICName:          row.PICName,
 		HandoverVerified: row.VerifiedAt != nil,
+		SessionVerified:  row.FieldVerifiedAt != nil,
 	}
 	if shipment.TruckID != nil {
 		if t, err := s.dispatch.masterdata.GetTruck(ctx, *shipment.TruckID); err == nil {
