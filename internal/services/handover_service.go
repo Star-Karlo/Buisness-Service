@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -75,6 +76,45 @@ func (s *HandoverService) FieldURL(token string) string {
 	return s.consoleBaseURL + "/webfield?token=" + token
 }
 
+// FieldLink is the dedicated link the receiving PIC is sent.
+//
+// It carries the order number and the code, so tapping it lands on the order
+// sheet with nothing to type. That is a deliberate trade: the code in the link
+// is no longer evidence that the PIC stood next to the driver, and what still
+// is, is the driver having entered the same code in K-Trip first — the page
+// refuses to open the audit until they have.
+func (s *HandoverService) FieldLink(orderNumber, code string) string {
+	if s.consoleBaseURL == "" {
+		return ""
+	}
+	return s.consoleBaseURL + "/webfield?order=" + url.QueryEscape(orderNumber) + "&code=" + url.QueryEscape(code)
+}
+
+// picForUnloading works out who to tell, without asking the driver.
+//
+// The planner already named a PIC for each point when the order was placed,
+// so the driver's screen has no business asking again at the gate. The order's
+// own choice wins; the site's default PIC is the fallback for orders placed
+// before the field existed.
+func (s *HandoverService) picForUnloading(ctx context.Context, order *models.Order) (name, phone string) {
+	if order == nil {
+		return "", ""
+	}
+	if pic, ok := order.Detail["unloadingPic"].(map[string]interface{}); ok {
+		name, _ = pic["name"].(string)
+		phone, _ = pic["phone"].(string)
+	}
+	if strings.TrimSpace(phone) == "" && order.DestinationWarehouseID != nil {
+		if wh, err := s.dispatch.Warehouse(ctx, *order.DestinationWarehouseID); err == nil {
+			if strings.TrimSpace(name) == "" {
+				name = wh.GetPicName()
+			}
+			phone = wh.GetPicPhone()
+		}
+	}
+	return strings.TrimSpace(name), strings.TrimSpace(phone)
+}
+
 func NewHandoverService(
 	shipments *repository.ShipmentRepository,
 	orders *repository.OrderRepository,
@@ -109,9 +149,18 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 		return nil, fmt.Errorf("%w: only the assigned driver may request a handover code", ErrForbidden)
 	}
 
-	// The PIC's number is now optional: it addresses no code, only the
-	// courtesy message with the Web-Field link. An unreachable PIC can still
-	// walk up and type the order number.
+	// Who receives the link. The driver's app no longer asks: the planner
+	// named a PIC for the unloading point when the order was placed, and
+	// asking again at the gate only invites a wrong number. An explicit
+	// argument still wins, for the case where the named PIC is not the one
+	// standing there.
+	order, _ := s.orders.FindByIDForService(ctx, shipment.OrderID)
+	if strings.TrimSpace(picName) == "" && strings.TrimSpace(picWhatsApp) == "" {
+		picName, picWhatsApp = s.picForUnloading(ctx, order)
+	}
+
+	// An unreachable PIC is not an error: they can still walk up to the
+	// driver and read the code off their screen.
 	number := ""
 	if strings.TrimSpace(picWhatsApp) != "" {
 		if number, err = normaliseWhatsApp(picWhatsApp); err != nil {
@@ -156,12 +205,13 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	// Sent after the row is committed, not before. A code that was delivered
 	// but not stored can never be verified, which strands the driver at the
 	// gate; a code stored but not delivered is recoverable by asking again.
-	order, _ := s.orders.FindByIDForService(ctx, shipment.OrderID)
 	orderNumber := ""
 	if order != nil {
 		orderNumber = order.OrderNumber
 	}
 	fieldURL := s.FieldURL(fieldToken)
+	// What the PIC is sent: the same page, reached with nothing to type.
+	picLink := s.FieldLink(orderNumber, code)
 
 	// To the driver, addressed as a user: that reaches the phone through push
 	// and the app's own inbox as well as WhatsApp, so a driver whose WhatsApp
@@ -182,18 +232,24 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	// To the warehouse, without the code: a truck is at your gate, ask the
 	// driver for the digits. Only to PICs who have an account — everyone else
 	// walks up to the driver, which is the flow the design draws.
-	s.notifyWarehousePICs(ctx, shipment, order, fieldURL, row.ID.String())
+	s.notifyWarehousePICs(ctx, shipment, order, picLink, number, row.ID.String())
 
 	return &IssueResult{Handover: row, Code: code}, nil
 }
 
-// notifyWarehousePICs tells the receiving site's people that a truck is in.
-func (s *HandoverService) notifyWarehousePICs(ctx context.Context, shipment *models.Shipment, order *models.Order, fieldURL, handoverID string) {
+// notifyWarehousePICs tells the receiving site that a truck is at the gate,
+// and gives them the link that opens its audit.
+//
+// Twice over, because the two recipients are reached differently: the site's
+// PICs who have console accounts get it in-app and as a push, and the number
+// the order named gets it on WhatsApp, account or not. A warehouse clerk with
+// no login is the common case, and they are the person at the gate.
+func (s *HandoverService) notifyWarehousePICs(ctx context.Context, shipment *models.Shipment, order *models.Order, picLink, picNumber, handoverID string) {
 	if order == nil || order.DestinationWarehouseID == nil {
 		return
 	}
 	wh, err := s.dispatch.Warehouse(ctx, *order.DestinationWarehouseID)
-	if err != nil || len(wh.GetPicUserIds()) == 0 {
+	if err != nil {
 		return
 	}
 	truck := ""
@@ -202,18 +258,27 @@ func (s *HandoverService) notifyWarehousePICs(ctx context.Context, shipment *mod
 			truck = t.GetPoliceNumber()
 		}
 	}
-	s.notifier.Notify(ctx, clients.Event{
-		Type:     notificationv1.EventType_EVENT_TYPE_FIELD_VERIFICATION_PENDING,
-		Subject:  clients.Subject{ID: order.ID.String(), Type: "order"},
-		Audience: clients.ToUsers(wh.GetPicUserIds()...),
-		Params: map[string]interface{}{
-			"truck":       truck,
-			"warehouse":   wh.GetName(),
-			"orderNumber": order.OrderNumber,
-			"fieldUrl":    fieldURL,
-		},
-		IdempotencyKey: "field-pending:" + handoverID,
-	})
+	params := map[string]interface{}{
+		"truck":       truck,
+		"warehouse":   wh.GetName(),
+		"orderNumber": order.OrderNumber,
+		"fieldUrl":    picLink,
+	}
+	send := func(audience *notificationv1.Audience, key string) {
+		s.notifier.Notify(ctx, clients.Event{
+			Type:           notificationv1.EventType_EVENT_TYPE_FIELD_VERIFICATION_PENDING,
+			Subject:        clients.Subject{ID: order.ID.String(), Type: "order"},
+			Audience:       audience,
+			Params:         params,
+			IdempotencyKey: key,
+		})
+	}
+	if ids := wh.GetPicUserIds(); len(ids) > 0 {
+		send(clients.ToUsers(ids...), "field-pending:"+handoverID)
+	}
+	if picNumber != "" {
+		send(clients.ToPhone(picNumber), "field-pending-wa:"+handoverID)
+	}
 }
 
 // VerifyInput is the driver's attempt.
