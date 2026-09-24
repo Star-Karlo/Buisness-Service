@@ -137,6 +137,11 @@ func NewHandoverService(
 type IssueResult struct {
 	Handover *models.ShipmentHandover
 	Code     string
+	// PICLink is the same link the PIC was sent: order number and code in the
+	// query, so tapping it opens the audit with nothing to type. On the
+	// driver's screen it is what they forward when the message did not
+	// arrive.
+	PICLink string
 }
 
 // Issue creates the unloading code and delivers it to the driver.
@@ -234,7 +239,7 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	// walks up to the driver, which is the flow the design draws.
 	s.notifyWarehousePICs(ctx, shipment, order, picLink, number, row.ID.String())
 
-	return &IssueResult{Handover: row, Code: code}, nil
+	return &IssueResult{Handover: row, Code: code, PICLink: picLink}, nil
 }
 
 // notifyWarehousePICs tells the receiving site that a truck is at the gate,

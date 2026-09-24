@@ -438,8 +438,12 @@ func (h *HandoverHandler) Issue(c *gin.Context) {
 	if row.PICWhatsApp != "" {
 		out["picNotified"] = maskNumber(row.PICWhatsApp)
 	}
-	// The Web-Field link and the order number, so the driver's screen can show
-	// the PIC how to reach the page without typing anything.
+	// The link the PIC was sent, so the driver can forward it themselves when
+	// the message did not arrive. It opens the audit with nothing to type;
+	// the token form is kept for clients that still read it.
+	if issued.PICLink != "" {
+		out["picUrl"] = issued.PICLink
+	}
 	if row.FieldToken != nil {
 		out["fieldToken"] = *row.FieldToken
 		out["fieldUrl"] = h.handovers.FieldURL(*row.FieldToken)
