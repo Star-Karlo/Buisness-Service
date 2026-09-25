@@ -77,6 +77,38 @@ func (h *DispatchHandler) Routes(c *gin.Context) {
 	response.OK(c, legs)
 }
 
+// ShipmentRoute serves the planned road for the shipment the caller is
+// driving.
+//
+// The same legs as /orders/{id}/routes, reached without dispatch.read. That
+// key opens the planner's screens too — the live fleet map, driver activity,
+// the candidate trucks for any order — and a driver's phone has no business
+// holding it just to draw its own line on a map. The gate here is the one the
+// other driver routes use: you are the driver this shipment is assigned to.
+//
+// @Summary  The planned route for a driver's own shipment
+// @Tags     Shipments
+// @Security BearerAuth
+// @Param    id path string true "Shipment ID"
+// @Success  200 {array} models.OrderRoute
+// @Router   /shipments/{id}/route [get]
+func (h *DispatchHandler) ShipmentRoute(c *gin.Context) {
+	actor, ok := callerActor(c)
+	if !ok {
+		return
+	}
+	id, ok := pathUUID(c)
+	if !ok {
+		return
+	}
+	legs, err := h.dispatch.RouteForDriver(c.Request.Context(), actor, id)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.OK(c, legs)
+}
+
 type rerouteRequest struct {
 	// Leg is "haul" or "approach". Defaults to approach, which is the one a
 	// planner re-plans: the haul is fixed by the warehouses, while the

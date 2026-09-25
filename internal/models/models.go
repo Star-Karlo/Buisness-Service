@@ -506,11 +506,32 @@ type Shipment struct {
 	HandoverVerified   bool       `gorm:"-" json:"handoverVerified"`
 	HandoverVerifiedAt *time.Time `gorm:"-" json:"handoverVerifiedAt,omitempty"`
 
+	// The trip's two sites, carried on the shipment so the driver's app does
+	// not have to read master data itself. A driver needs the address, the
+	// pin and the fence of the two warehouses on THIS trip; fetching them
+	// through /warehouses/{id} meant giving every driver's token the right to
+	// read every warehouse the company has. Not columns.
+	OriginWarehouse      *TripSite `gorm:"-" json:"originWarehouse,omitempty"`
+	DestinationWarehouse *TripSite `gorm:"-" json:"destinationWarehouse,omitempty"`
+
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 func (Shipment) TableName() string { return "shipments" }
+
+// TripSite is one end of a trip as the driver's app needs it.
+type TripSite struct {
+	ID                   string  `json:"id"`
+	Name                 string  `json:"name"`
+	Address              string  `json:"address,omitempty"`
+	City                 string  `json:"city,omitempty"`
+	Latitude             float64 `json:"latitude"`
+	Longitude            float64 `json:"longitude"`
+	GeofenceRadiusMeters int     `json:"geofenceRadiusMeters,omitempty"`
+	PICName              string  `json:"picName,omitempty"`
+	PICPhone             string  `json:"picPhone,omitempty"`
+}
 
 // POD submission states.
 const (

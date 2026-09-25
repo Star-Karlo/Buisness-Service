@@ -39,6 +39,9 @@ type DispatchService struct {
 	cache      *routing.Cache
 	masterdata *clients.MasterData
 	telemetry  *telemetry.Client
+	// shipments answers "is this caller the driver of that shipment", for the
+	// driver's own route. Optional (tests).
+	shipments *repository.ShipmentRepository
 }
 
 func NewDispatchService(
@@ -386,6 +389,23 @@ func (s *DispatchService) planLeg(ctx context.Context, orderID uuid.UUID, leg st
 }
 
 // Routes returns an order's planned legs.
+// RouteForDriver returns a shipment's planned legs to the driver assigned to
+// it. The shipment repository is injected by WithShipments; without it the
+// call is refused rather than silently answering anyone.
+func (s *DispatchService) RouteForDriver(ctx context.Context, actor Actor, shipmentID uuid.UUID) ([]models.OrderRoute, error) {
+	if s.shipments == nil {
+		return nil, fmt.Errorf("%w: route lookup is not available", ErrForbidden)
+	}
+	shipment, err := s.shipments.FindByID(ctx, shipmentID)
+	if err != nil {
+		return nil, err
+	}
+	if shipment.DriverUserID == nil || *shipment.DriverUserID != actor.UserID {
+		return nil, fmt.Errorf("%w: only the assigned driver may read this shipment's route", ErrForbidden)
+	}
+	return s.Routes(ctx, actor, shipment.OrderID)
+}
+
 func (s *DispatchService) Routes(ctx context.Context, actor Actor, orderID uuid.UUID) ([]models.OrderRoute, error) {
 	order, err := s.orders.FindByID(ctx, actor.CompanyID, orderID)
 	if err != nil {
@@ -470,6 +490,12 @@ func (s *DispatchService) warehousePoint(ctx context.Context, id string) (routin
 }
 
 // Warehouse exposes a resolved warehouse for callers that need its geofence.
+// WithShipments lets the service answer a driver's own route.
+func (s *DispatchService) WithShipments(shipments *repository.ShipmentRepository) *DispatchService {
+	s.shipments = shipments
+	return s
+}
+
 func (s *DispatchService) Warehouse(ctx context.Context, id string) (*masterdatav1.Warehouse, error) {
 	return s.masterdata.GetWarehouse(ctx, id)
 }

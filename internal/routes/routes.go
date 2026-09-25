@@ -197,6 +197,11 @@ func Setup(d Deps) *gin.Engine {
 
 	// The driver flow: accept, cargo checks, POD submission and review. No
 	// module permission, as above; the services check who may do what.
+	// The driver's own planned route. Deliberately here and not behind
+	// dispatch.read: that key also opens the planner's live fleet map and
+	// driver activity, which a phone has no business holding.
+	shipments.GET("/:id/route", d.Dispatch.ShipmentRoute)
+
 	shipments.POST("/:id/accept", d.Pod.Accept)
 	shipments.PUT("/:id/cargo-check", d.Pod.CargoCheck)
 	shipments.POST("/:id/pod", d.Pod.Submit)

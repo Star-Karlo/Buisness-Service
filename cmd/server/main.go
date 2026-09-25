@@ -206,6 +206,9 @@ func run() error {
 	fieldConfigService := services.NewFieldConfigService(fieldConfigRepo)
 	dispatchService := services.NewDispatchService(orderRepo, orderRouteRepo, routeCache, masterDataClient, telemetryClient)
 	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo, masterDataClient, routeCache)
+	// So a driver may read the route of the shipment they are driving without
+	// holding the planner's dispatch.read.
+	dispatchService.WithShipments(shipmentRepo)
 	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
 	shipmentService.WithDriverFlow(handoverRepo, podRepo)
 	podService := services.NewPodService(podRepo, shipmentRepo, orderRepo, shipmentService, notifier)

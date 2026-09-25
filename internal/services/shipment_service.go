@@ -56,12 +56,46 @@ func (s *ShipmentService) decorate(ctx context.Context, shipment *models.Shipmen
 			shipment.PodHistory = all
 		}
 	}
+	s.fillTripSites(ctx, shipment)
 	if s.handovers != nil {
 		if ok, at, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading"); err == nil {
 			shipment.HandoverVerified, shipment.HandoverVerifiedAt = ok, at
 		}
 	}
 	return shipment
+}
+
+// fillTripSites attaches the two warehouses of the trip.
+//
+// So the driver's app can read an address, a pin and a fence without holding
+// warehouse.read, which would let a phone enumerate every site the company
+// has. The service fetches them under its own credentials, for this shipment
+// only.
+func (s *ShipmentService) fillTripSites(ctx context.Context, shipment *models.Shipment) {
+	if s.masterdata == nil {
+		return
+	}
+	order, err := s.orders.FindByIDForService(ctx, shipment.OrderID)
+	if err != nil {
+		return
+	}
+	site := func(id *string) *models.TripSite {
+		if id == nil || *id == "" {
+			return nil
+		}
+		w, err := s.masterdata.GetWarehouse(ctx, *id)
+		if err != nil {
+			return nil
+		}
+		return &models.TripSite{
+			ID: w.GetId(), Name: w.GetName(), Address: w.GetAddress(), City: w.GetCityId(),
+			Latitude: w.GetLatitude(), Longitude: w.GetLongitude(),
+			GeofenceRadiusMeters: int(w.GetGeofenceRadiusMeters()),
+			PICName:              w.GetPicName(), PICPhone: w.GetPicPhone(),
+		}
+	}
+	shipment.OriginWarehouse = site(order.OriginWarehouseID)
+	shipment.DestinationWarehouse = site(order.DestinationWarehouseID)
 }
 
 func NewShipmentService(

@@ -166,3 +166,24 @@ func TestWebFieldRoutesAreRegistered(t *testing.T) {
 		t.Errorf("GET the Web-Field inbox without a token = %d, want 401", rec.Code)
 	}
 }
+
+// A driver reads their own trip through the shipment routes, which carry no
+// module permission — the services check who is asking. If these ever move
+// behind dispatch.read again, every driver's token gains the planner's live
+// fleet map and driver activity along with them.
+func TestDriverTripRoutesCarryNoModulePermission(t *testing.T) {
+	router := buildRouter(t, "production")
+
+	for _, path := range []string{
+		"/api/v1/shipments/00000000-0000-0000-0000-000000000000/route",
+		"/api/v1/shipments/00000000-0000-0000-0000-000000000000/status",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		// 401 without a token, never 403: a 403 would mean a module gate ran.
+		if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s without a token = %d, want 401", path, rec.Code)
+		}
+	}
+}
