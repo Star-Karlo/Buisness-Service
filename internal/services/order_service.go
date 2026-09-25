@@ -1097,6 +1097,24 @@ func setIfNotEmpty(target **string, value string) {
 // figures, invoice adjustments, post-trip reconciliation. Keys are replaced
 // wholesale (a nested object is a unit), and a null removes a key. Either
 // party to the order may write; the detail is shared working state.
+// SetGeofencing decides, for one order, whether an arrival outside the
+// warehouse's radius is refused. Nil hands the decision back to the company
+// setting.
+//
+// Per order rather than per company because the trips differ: a fenced
+// distribution yard and a roadside drop on the same day want different
+// answers, and the planner who has to unfence one awkward delivery should not
+// have to unfence every other truck on the road to do it.
+func (s *OrderService) SetGeofencing(ctx context.Context, actor Actor, id uuid.UUID, enabled *bool) (*models.Order, error) {
+	if _, err := s.orders.FindByID(ctx, actor.CompanyID, id); err != nil {
+		return nil, err
+	}
+	if err := s.orders.UpdateFields(ctx, id, map[string]interface{}{"geofencing_enabled": enabled}); err != nil {
+		return nil, err
+	}
+	return s.orders.FindByID(ctx, actor.CompanyID, id)
+}
+
 func (s *OrderService) PatchDetail(ctx context.Context, actor Actor, id uuid.UUID, patch map[string]interface{}) (*models.Order, error) {
 	order, err := s.orders.FindByID(ctx, actor.CompanyID, id)
 	if err != nil {

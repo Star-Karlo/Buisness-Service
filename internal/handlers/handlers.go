@@ -351,6 +351,42 @@ func (h *OrderHandler) AssignDriver(c *gin.Context) {
 // @Param    id path string true "Order ID"
 // @Success  200 {object} object
 // @Router   /orders/{id}/history [get]
+type geofencingRequest struct {
+	// Pointer, and absent means NULL: "follow the company setting" is a real
+	// third answer, not the same as false.
+	Enabled *bool `json:"enabled"`
+}
+
+// SetGeofencing turns arrival enforcement on or off for one order.
+//
+// @Summary  Set an order's geofence enforcement
+// @Tags     Orders
+// @Security BearerAuth
+// @Param    id path string true "Order ID"
+// @Success  200 {object} models.Order
+// @Router   /orders/{id}/geofencing [put]
+func (h *OrderHandler) SetGeofencing(c *gin.Context) {
+	actor, ok := callerActor(c)
+	if !ok {
+		return
+	}
+	id, ok := pathUUID(c)
+	if !ok {
+		return
+	}
+	var req geofencingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Kirim {\"enabled\": true|false|null}")
+		return
+	}
+	order, err := h.orders.SetGeofencing(c.Request.Context(), actor, id, req.Enabled)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.OK(c, order)
+}
+
 func (h *OrderHandler) History(c *gin.Context) {
 	actor, ok := callerActor(c)
 	if !ok {

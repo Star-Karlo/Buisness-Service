@@ -374,7 +374,11 @@ type Order struct {
 	CustomerID      *string `gorm:"column:customer_id" json:"customerId,omitempty"`
 	ReferenceNumber *string `gorm:"column:reference_number" json:"referenceNumber,omitempty"`
 
-	Detail JSONB `gorm:"type:jsonb" json:"detail"`
+	// GeofencingEnabled decides, for THIS order, whether an arrival reported
+	// outside the warehouse's radius is refused. Nil follows the company
+	// setting; see migrations/000014.
+	GeofencingEnabled *bool `gorm:"column:geofencing_enabled" json:"geofencingEnabled,omitempty"`
+	Detail            JSONB `gorm:"type:jsonb" json:"detail"`
 
 	CancelledAt       *time.Time `json:"cancelledAt,omitempty"`
 	CancelledByUserID *uuid.UUID `gorm:"type:uuid" json:"cancelledByUserId,omitempty"`
