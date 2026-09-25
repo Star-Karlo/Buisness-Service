@@ -72,7 +72,10 @@ func (s *PodService) Submit(ctx context.Context, actor Actor, shipmentID uuid.UU
 	if shipment.StatusCode != wantStatus {
 		return nil, fmt.Errorf("%w: the %s POD is submitted while the shipment is %s, not %s", ErrTransition, in.Stage, wantStatus, shipment.StatusCode)
 	}
-	if checked == nil {
+	// At unloading the check is the PIC's, and it is waived while Web-Field
+	// is hidden — see WebFieldEnabled. The driver's own check at loading is
+	// never waived: it is their statement about what they loaded.
+	if checked == nil && (in.Stage == "loading" || WebFieldEnabled) {
 		if in.Stage == "loading" {
 			return nil, fmt.Errorf("%w: confirm whether the cargo matches the order before submitting the POD", ErrValidation)
 		}

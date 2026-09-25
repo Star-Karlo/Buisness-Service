@@ -496,8 +496,10 @@ type Shipment struct {
 	// app and the console so one call answers "what is the driver waiting
 	// on". Not a column.
 	Pods []ShipmentPod `gorm:"-" json:"pods,omitempty"`
-	// HandoverVerified says the unloading OTP has been confirmed. Not a column.
-	HandoverVerified bool `gorm:"-" json:"handoverVerified"`
+	// HandoverVerified says the unloading OTP has been confirmed, and when.
+	// Neither is a column: both come from the handover register on read.
+	HandoverVerified   bool       `gorm:"-" json:"handoverVerified"`
+	HandoverVerifiedAt *time.Time `gorm:"-" json:"handoverVerifiedAt,omitempty"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

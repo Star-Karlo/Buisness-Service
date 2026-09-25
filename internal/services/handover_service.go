@@ -234,10 +234,13 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 		IdempotencyKey: "handover:" + row.ID.String(),
 	})
 
-	// To the warehouse, without the code: a truck is at your gate, ask the
-	// driver for the digits. Only to PICs who have an account — everyone else
-	// walks up to the driver, which is the flow the design draws.
-	s.notifyWarehousePICs(ctx, shipment, order, picLink, number, row.ID.String())
+	// To the warehouse, so they know a truck is in and can open the audit.
+	// Silent while Web-Field is hidden: asking an external PIC to act on a
+	// page the flow no longer waits for only invites them to be blamed when
+	// nothing happens.
+	if WebFieldEnabled {
+		s.notifyWarehousePICs(ctx, shipment, order, picLink, number, row.ID.String())
+	}
 
 	return &IssueResult{Handover: row, Code: code, PICLink: picLink}, nil
 }

@@ -149,13 +149,18 @@ func (r *HandoverRepository) FindLive(ctx context.Context, shipmentID uuid.UUID,
 	return &row, err
 }
 
-// IsVerified says whether a stage's handover code has been confirmed.
-func (r *HandoverRepository) IsVerified(ctx context.Context, shipmentID uuid.UUID, stage string) (bool, error) {
-	var n int64
-	err := r.db.WithContext(ctx).Model(&models.ShipmentHandover{}).
+// IsVerified says whether a stage's handover code has been confirmed, and
+// when. The timestamp is what the order's timeline shows for "OTP bongkar
+// terverifikasi"; without it the step had to borrow another event's time.
+func (r *HandoverRepository) IsVerified(ctx context.Context, shipmentID uuid.UUID, stage string) (bool, *time.Time, error) {
+	var rows []models.ShipmentHandover
+	err := r.db.WithContext(ctx).
 		Where("shipment_id = ? AND stage = ? AND verified_at IS NOT NULL", shipmentID, stage).
-		Count(&n).Error
-	return n > 0, err
+		Order("verified_at ASC").Limit(1).Find(&rows).Error
+	if err != nil || len(rows) == 0 {
+		return false, nil, err
+	}
+	return true, rows[0].VerifiedAt, nil
 }
 
 // FindByFieldToken resolves the PIC's field link.

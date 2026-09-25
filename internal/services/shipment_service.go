@@ -54,8 +54,8 @@ func (s *ShipmentService) decorate(ctx context.Context, shipment *models.Shipmen
 		}
 	}
 	if s.handovers != nil {
-		if ok, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading"); err == nil {
-			shipment.HandoverVerified = ok
+		if ok, at, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading"); err == nil {
+			shipment.HandoverVerified, shipment.HandoverVerifiedAt = ok, at
 		}
 	}
 	return shipment
@@ -147,7 +147,7 @@ func (s *ShipmentService) assertHandoverVerified(ctx context.Context, shipmentID
 	if s.handovers == nil {
 		return nil
 	}
-	ok, err := s.handovers.IsVerified(ctx, shipmentID, "unloading")
+	ok, _, err := s.handovers.IsVerified(ctx, shipmentID, "unloading")
 	if err != nil {
 		return err
 	}
