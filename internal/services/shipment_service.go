@@ -52,6 +52,9 @@ func (s *ShipmentService) decorate(ctx context.Context, shipment *models.Shipmen
 		if latest, err := s.pods.Latest(ctx, shipment.ID); err == nil {
 			shipment.Pods = latest
 		}
+		if all, err := s.pods.ListByShipment(ctx, shipment.ID); err == nil {
+			shipment.PodHistory = all
+		}
 	}
 	if s.handovers != nil {
 		if ok, at, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading"); err == nil {

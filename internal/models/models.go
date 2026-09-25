@@ -496,6 +496,11 @@ type Shipment struct {
 	// app and the console so one call answers "what is the driver waiting
 	// on". Not a column.
 	Pods []ShipmentPod `gorm:"-" json:"pods,omitempty"`
+	// PodHistory is every submission, newest first, filled on read: the
+	// driver app's shipment detail shows a rejected loading POD beside the
+	// one that replaced it, which Pods (latest per stage) cannot. Not a
+	// column.
+	PodHistory []ShipmentPod `gorm:"-" json:"podHistory,omitempty"`
 	// HandoverVerified says the unloading OTP has been confirmed, and when.
 	// Neither is a column: both come from the handover register on read.
 	HandoverVerified   bool       `gorm:"-" json:"handoverVerified"`
