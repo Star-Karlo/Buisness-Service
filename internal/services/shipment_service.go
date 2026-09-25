@@ -332,23 +332,14 @@ func (s *ShipmentService) recordArrival(ctx context.Context, in AdvanceInput, or
 // geofencingEnforced answers whether THIS order refuses an arrival reported
 // outside the fence.
 //
-// The order's own answer wins, and the company setting is the default it falls
-// back to. That ordering is the point of the per-order switch: a planner
-// handling one awkward delivery must be able to let it through without
-// unfencing every other truck on the road, and a company that wants the rule
-// everywhere still gets it on every order nobody has touched.
-//
-// A master-data or auth outage answers "not enforced": a driver at a gate must
-// not be stranded because a setting could not be read.
-func (s *ShipmentService) geofencingEnforced(ctx context.Context, order *models.Order) bool {
-	if order.GeofencingEnabled != nil {
-		return *order.GeofencingEnabled
-	}
-	settings, err := s.auth.CompanySettings(ctx, order.ShipperCompanyID.String())
-	if err != nil {
-		return false
-	}
-	return settings.GetFinishWithGeofencing()
+// The order decides, and nothing else does. There was a company-wide switch
+// behind this; it is gone, because the trips are what differ — a fenced
+// distribution yard and a roadside drop happen on the same day — and a single
+// company answer was either too strict for one of them or too loose for the
+// other. An order nobody has decided about is not enforced, so the rule
+// applies where a planner asked for it and nowhere else.
+func (s *ShipmentService) geofencingEnforced(_ context.Context, order *models.Order) bool {
+	return order.GeofencingEnabled != nil && *order.GeofencingEnabled
 }
 
 // syncOrderStatus keeps the order in step with its shipment.

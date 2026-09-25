@@ -7,11 +7,12 @@
 -- setting off for one awkward delivery has turned it off for every other
 -- truck on the road.
 --
--- NULL means "follow the company setting", which is what every existing order
--- does, so nothing changes until somebody decides otherwise on an order.
+-- NULL means nobody has decided, and an undecided order is not enforced —
+-- which is what every existing order does today, so nothing changes until a
+-- planner turns it on for a delivery that needs it.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS geofencing_enabled BOOLEAN;
 
 COMMENT ON COLUMN orders.geofencing_enabled IS
     'Per-order geofence enforcement: TRUE demands the driver be inside the '
-    'warehouse radius to report arrival, FALSE records the distance and lets '
-    'them through, NULL follows the company setting finishWithGeofencing.';
+    'warehouse radius to report arrival, FALSE or NULL records the distance '
+    'and lets them through. The company-wide switch it replaced is gone.';

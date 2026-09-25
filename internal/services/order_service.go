@@ -1098,8 +1098,7 @@ func setIfNotEmpty(target **string, value string) {
 // wholesale (a nested object is a unit), and a null removes a key. Either
 // party to the order may write; the detail is shared working state.
 // SetGeofencing decides, for one order, whether an arrival outside the
-// warehouse's radius is refused. Nil hands the decision back to the company
-// setting.
+// warehouse's radius is refused. Nil means undecided, which is not enforced.
 //
 // Per order rather than per company because the trips differ: a fenced
 // distribution yard and a roadside drop on the same day want different
