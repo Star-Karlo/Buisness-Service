@@ -352,23 +352,15 @@ func (s *HandoverService) Verify(ctx context.Context, actor Actor, shipmentID uu
 	live.VerifiedAt = ptrTime(time.Now())
 	live.VerifiedLat, live.VerifiedLon, live.VerifiedWithinGeofence = lat, lon, within
 
-	// The confirmed code is the driver flow's "start unloading": the swipe
-	// opened the OTP page, and the PIC's code closes it. Taken here so the
-	// app needs no second call; a shipment not at the gate (already
-	// unloading, say) is left as it is.
-	if s.lifecycle != nil && shipment.StatusCode == models.ShipmentAtUnloading {
-		if _, err := s.lifecycle.Advance(ctx, actor, AdvanceInput{ShipmentID: shipmentID, To: models.ShipmentUnloading, Position: positionOf(in)}); err != nil {
-			return nil, err
-		}
-	}
+	// The code no longer starts the unloading by itself. The status sheet
+	// puts "OTP bongkar terverifikasi" before "Mulai bongkar", so confirming
+	// the code leaves the shipment at the gate and the driver's slide is what
+	// begins the work — which is also the honest reading: the code proves
+	// somebody is there to receive, not that the doors are open.
+	//
+	// Advance to unloading still requires this verification; see
+	// ShipmentService.assertHandoverVerified.
 	return live, nil
-}
-
-func positionOf(in VerifyInput) *Position {
-	if in.Latitude == nil || in.Longitude == nil {
-		return nil
-	}
-	return &Position{Latitude: *in.Latitude, Longitude: *in.Longitude}
 }
 
 // FieldView is what the PIC's field page shows: enough to know which truck

@@ -175,7 +175,12 @@ func (s *PodService) Review(ctx context.Context, actor Actor, shipmentID, podID 
 	// The step the approval means. Taken as the system, on the reviewer's
 	// behalf; the state machine still checks the shipment is where the
 	// stage says it is.
-	steps := []string{models.ShipmentLoaded}
+	// Approving the loading POD also sends the truck on its way: the status
+	// sheet has "Menuju titik bongkar" triggered by the planner's approval,
+	// not by the truck leaving the yard. The driver's geofence exit no longer
+	// has a step to take, which is the point — the order stops sitting on
+	// "POD muat terverifikasi" while a loaded truck waits for a gate.
+	steps := []string{models.ShipmentLoaded, models.ShipmentToUnloading}
 	if pod.Stage == "unloading" {
 		steps = []string{models.ShipmentUnloaded, models.ShipmentFinished}
 	}
