@@ -210,6 +210,16 @@ func (s *ShipmentService) advance(ctx context.Context, actor Actor, shipment *mo
 		return nil, err
 	}
 
+	// Starting the work is the step the geofence has to hold, not just the
+	// arrival: a driver whose app reported arrival from the road can still
+	// slide "Mulai Muat", and the arrival check has nothing left to refuse.
+	// Skipped for the system and for a test bypass, as every other gate is.
+	if role == models.RoleDriver && !actor.StatusBypass {
+		if err := s.assertAtSite(ctx, in, order); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.shipments.ApplyStatus(ctx, in.ShipmentID, shipment.StatusCode, in.To, fields); err != nil {
 		return nil, err
 	}
@@ -251,6 +261,57 @@ func (s *ShipmentService) assertActorMayAdvance(actor Actor, shipment *models.Sh
 
 	if !order.InvolvesCompany(actor.CompanyID) {
 		return fmt.Errorf("%w: your company is not a party to this order", ErrForbidden)
+	}
+	return nil
+}
+
+// assertAtSite refuses "mulai muat" / "mulai bongkar" from somewhere else.
+//
+// Only when the order asks for it — see geofencingEnforced — and then it is a
+// refusal the driver can act on: it names the distance and the point. A step
+// taken with no position at all is refused too, because "the app did not say
+// where I am" is not evidence of being there, and an enforced order that
+// accepted a missing position would enforce nothing.
+func (s *ShipmentService) assertAtSite(ctx context.Context, in AdvanceInput, order *models.Order) error {
+	var warehouseID, label string
+	switch in.To {
+	case models.ShipmentLoading:
+		label = "titik muat"
+		if order.OriginWarehouseID != nil {
+			warehouseID = *order.OriginWarehouseID
+		}
+	case models.ShipmentUnloading:
+		label = "titik bongkar"
+		if order.DestinationWarehouseID != nil {
+			warehouseID = *order.DestinationWarehouseID
+		}
+	default:
+		return nil
+	}
+	if warehouseID == "" || !s.geofencingEnforced(ctx, order) {
+		return nil
+	}
+
+	if in.Position == nil {
+		return fmt.Errorf("%w: Driver terdeteksi belum berada di %s — aktifkan GPS lalu coba lagi", ErrValidation, label)
+	}
+
+	warehouse, err := s.masterdata.GetWarehouse(ctx, warehouseID)
+	if err != nil {
+		// A master data outage must not strand a driver at a gate.
+		return nil
+	}
+	radius := int(warehouse.GetGeofenceRadiusMeters())
+	if radius <= 0 {
+		radius = 1000
+	}
+	distance := haversineMeters(
+		in.Position.Latitude, in.Position.Longitude,
+		warehouse.GetLatitude(), warehouse.GetLongitude(),
+	)
+	if distance > float64(radius) {
+		return fmt.Errorf("%w: Driver terdeteksi belum berada di %s — %.0f m dari gudang, di luar radius %d m",
+			ErrValidation, label, distance, radius)
 	}
 	return nil
 }
