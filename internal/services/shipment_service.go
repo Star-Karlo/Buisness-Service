@@ -265,6 +265,18 @@ func (s *ShipmentService) assertActorMayAdvance(actor Actor, shipment *models.Sh
 	return nil
 }
 
+// siteLabel names the end of the trip a step belongs to, in the driver's
+// words: every geofence refusal says "titik muat" or "titik bongkar" rather
+// than naming a status nobody outside this codebase uses.
+func siteLabel(to string) string {
+	switch to {
+	case models.ShipmentAtUnloading, models.ShipmentUnloading:
+		return "titik bongkar"
+	default:
+		return "titik muat"
+	}
+}
+
 // assertAtSite refuses "mulai muat" / "mulai bongkar" from somewhere else.
 //
 // Only when the order asks for it — see geofencingEnforced — and then it is a
@@ -273,21 +285,20 @@ func (s *ShipmentService) assertActorMayAdvance(actor Actor, shipment *models.Sh
 // where I am" is not evidence of being there, and an enforced order that
 // accepted a missing position would enforce nothing.
 func (s *ShipmentService) assertAtSite(ctx context.Context, in AdvanceInput, order *models.Order) error {
-	var warehouseID, label string
+	var warehouseID string
 	switch in.To {
 	case models.ShipmentLoading:
-		label = "titik muat"
 		if order.OriginWarehouseID != nil {
 			warehouseID = *order.OriginWarehouseID
 		}
 	case models.ShipmentUnloading:
-		label = "titik bongkar"
 		if order.DestinationWarehouseID != nil {
 			warehouseID = *order.DestinationWarehouseID
 		}
 	default:
 		return nil
 	}
+	label := siteLabel(in.To)
 	if warehouseID == "" || !s.geofencingEnforced(ctx, order) {
 		return nil
 	}
@@ -382,9 +393,13 @@ func (s *ShipmentService) recordArrival(ctx context.Context, in AdvanceInput, or
 	}
 
 	if s.geofencingEnforced(ctx, order) {
+		// Same sentence the "mulai muat" refusal uses. A driver walking
+		// through the flow can be refused at the arrival or at the start
+		// depending on where their GPS put them, and two different wordings
+		// for the same fact reads as two different faults.
 		return fmt.Errorf(
-			"%w: you are %.0f m from the warehouse, outside the %d m geofence",
-			ErrValidation, distance, radius,
+			"%w: Driver terdeteksi belum berada di %s — %.0f m dari gudang, di luar radius %d m",
+			ErrValidation, siteLabel(in.To), distance, radius,
 		)
 	}
 	return nil
