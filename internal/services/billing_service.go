@@ -133,6 +133,12 @@ type RateInput struct {
 }
 
 // CreateAgreement records a negotiated contract.
+// laneFieldMax is what agreement_rates allows for a lane field. The columns
+// hold place NAMES rather than ids — there is no region table for an id to
+// reference — and the longest in the picker, "KABUPATEN LABUHANBATU SELATAN",
+// is 29 characters. See migrations/000015.
+const laneFieldMax = 64
+
 func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in CreateAgreementInput) (*models.Agreement, error) {
 	if in.ValidUntil.Before(in.ValidFrom) {
 		return nil, fmt.Errorf("%w: validUntil cannot be before validFrom", ErrValidation)
@@ -163,6 +169,22 @@ func (s *BillingService) CreateAgreement(ctx context.Context, actor Actor, in Cr
 	for i, r := range in.Rates {
 		if r.Price.IsNegative() {
 			return nil, fmt.Errorf("%w: rate %d has a negative price", ErrValidation, i)
+		}
+		// Lane fields are varchar(64) in the table. Postgres answers a longer
+		// value with a 22001, which reaches the planner as a bare 500 and
+		// tells them nothing; this says which field and what was sent.
+		for _, f := range []struct {
+			name, value string
+		}{
+			{"originCityId", r.OriginCityID}, {"destinationCityId", r.DestinationCityID},
+			{"originDistrictId", r.OriginDistrictID}, {"destinationDistrictId", r.DestinationDistrictID},
+			{"originWarehouseId", r.OriginWarehouseID}, {"destinationWarehouseId", r.DestinationWarehouseID},
+			{"truckTypeId", r.TruckTypeID}, {"pricingTypeId", r.PricingTypeID},
+		} {
+			if len(f.value) > laneFieldMax {
+				return nil, fmt.Errorf("%w: rate %d %s is %d characters, longer than the %d allowed: %q",
+					ErrValidation, i, f.name, len(f.value), laneFieldMax, f.value)
+			}
 		}
 	}
 

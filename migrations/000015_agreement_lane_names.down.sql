@@ -1,0 +1,39 @@
+-- Narrowing back fails on any row already storing a longer name, which is the
+-- point of the widening; truncating here would silently corrupt a lane.
+DROP VIEW IF EXISTS agreement_price_history;
+
+ALTER TABLE agreement_rates
+    ALTER COLUMN origin_city_id          TYPE VARCHAR(24),
+    ALTER COLUMN destination_city_id     TYPE VARCHAR(24),
+    ALTER COLUMN origin_district_id      TYPE VARCHAR(24),
+    ALTER COLUMN destination_district_id TYPE VARCHAR(24);
+
+CREATE VIEW agreement_price_history AS
+SELECT
+    a.root_agreement_id,
+    a.id            AS agreement_id,
+    a.agreement_number,
+    a.version,
+    a.revision_kind,
+    a.revision_note,
+    a.status_code,
+    a.valid_from,
+    a.valid_until,
+    a.approved_at,
+    a.approved_by_user_id,
+    a.superseded_at,
+    r.id            AS rate_id,
+    r.origin_city_id,
+    r.destination_city_id,
+    r.origin_district_id,
+    r.destination_district_id,
+    r.truck_type_id,
+    r.pricing_type_id,
+    r.price,
+    r.currency_id
+FROM agreements a
+LEFT JOIN agreement_rates r ON r.agreement_id = a.id
+WHERE a.deleted_at IS NULL;
+
+COMMENT ON VIEW agreement_price_history IS
+    'Every priced line of every version of every agreement, for the PRD''s "view price history". Derived, not stored: the rates and versions already hold the facts.';
