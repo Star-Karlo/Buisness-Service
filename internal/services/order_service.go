@@ -1146,8 +1146,38 @@ func rateByWarehouseOrOnlyRate(agreement *models.Agreement, order *models.Order)
 			return r
 		}
 	}
-	if len(agreement.Rates) == 1 {
-		return &agreement.Rates[0]
+	// One price across every lane the contract lists: the lane cannot decide
+	// what is already decided.
+	//
+	// This used to insist on exactly one rate, which held while a
+	// multi-shipment agreement stored its routes as a single joined string.
+	// It stores one rate per lane now, so a contract naming three origins and
+	// three destinations has nine rates at one tarif — and the old rule
+	// refused every order under it, because no rate matched the lane and there
+	// was more than one to fall back to. Matching by city cannot rescue that:
+	// a warehouse's city is typed by hand in MyWarehouse ("SEMARANG CITY")
+	// while an agreement's comes from a picker ("KOTA SEMARANG"), so the two
+	// rarely agree.
+	if price, ok := singlePricedAgreement(agreement); ok {
+		return price
 	}
 	return nil
+}
+
+// singlePricedAgreement returns the rate to use when every rate agrees on the
+// price, and nothing when they differ — a contract that prices lanes
+// differently must match the lane, and guessing there would invoice the wrong
+// figure.
+func singlePricedAgreement(agreement *models.Agreement) (*models.AgreementRate, bool) {
+	if len(agreement.Rates) == 0 {
+		return nil, false
+	}
+	first := &agreement.Rates[0]
+	for i := 1; i < len(agreement.Rates); i++ {
+		r := &agreement.Rates[i]
+		if !r.Price.Equal(first.Price) || deref(r.PricingTypeID) != deref(first.PricingTypeID) {
+			return nil, false
+		}
+	}
+	return first, true
 }
