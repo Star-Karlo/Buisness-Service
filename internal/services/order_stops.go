@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/karlo/business-service/internal/models"
 )
@@ -154,5 +155,61 @@ func (s *OrderService) SyncStops(ctx context.Context, order *models.Order) error
 	if err := ValidateStopSequence(order); err != nil {
 		return err
 	}
-	return s.stops.Replace(ctx, order.ID, stopsForOrder(order))
+
+	want := stopsForOrder(order)
+	have, err := s.stops.ListByOrder(ctx, order.ID)
+	if err != nil {
+		return err
+	}
+
+	// Nothing to do when the journey already describes these points. Worth
+	// checking because the stop list is rebuilt by every write that touches
+	// the order's detail, and rebuilding it is destructive: Replace deletes
+	// the rows and inserts new ones with new ids.
+	if sameJourney(have, want) {
+		return nil
+	}
+
+	// Once the driver has been somewhere, the list is history, not a plan.
+	//
+	// Rewriting it would discard that stop's arrival, start and cargo check,
+	// and — because a POD and a handover reference the stop and are SET NULL
+	// when it goes — detach the signed paperwork and the receiver's confirmed
+	// code from the visit they belong to. A delivery whose PODs no longer
+	// name a stop reads as unfinished, and a receiver who has already
+	// confirmed their code is asked for it again.
+	if visited := firstVisited(have); visited != nil {
+		return fmt.Errorf("%w: perjalanan sudah dimulai di %s — urutan dan titik tidak bisa diubah lagi",
+			ErrValidation, stopLabel(visited))
+	}
+	return s.stops.Replace(ctx, order.ID, want)
+}
+
+// sameJourney says whether a stop list already describes the wanted points, in
+// the same order and with the same pairing. Compared on what the planner
+// chose, not on the recorded progress, which is what makes it safe to skip the
+// rebuild and keep the visits.
+func sameJourney(have, want []models.OrderStop) bool {
+	if len(have) != len(want) {
+		return false
+	}
+	for i := range have {
+		if have[i].Seq != want[i].Seq ||
+			have[i].Kind != want[i].Kind ||
+			have[i].ShipmentNo != want[i].ShipmentNo ||
+			have[i].WarehouseID != want[i].WarehouseID {
+			return false
+		}
+	}
+	return true
+}
+
+// firstVisited returns the earliest stop the driver has reached, if any.
+func firstVisited(stops []models.OrderStop) *models.OrderStop {
+	for i := range stops {
+		if stops[i].ArrivedAt != nil || stops[i].StartedAt != nil || stops[i].FinishedAt != nil {
+			return &stops[i]
+		}
+	}
+	return nil
 }

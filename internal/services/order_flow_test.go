@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/karlo/business-service/internal/models"
 )
@@ -178,5 +179,75 @@ func TestSingleShipmentOrderIsUntouchedByAnyOfThis(t *testing.T) {
 	}
 	if err := ValidateStopSequence(order); err != nil {
 		t.Errorf("a single-shipment order has no sequence to validate: %v", err)
+	}
+}
+
+func TestSameJourneySkipsARebuild(t *testing.T) {
+	order := orderWith(models.JSONB{
+		"loadingPoints":   []interface{}{"jakarta", "bandung"},
+		"unloadingPoints": []interface{}{"semarang", "priok"},
+	})
+	want := stopsForOrder(order)
+
+	// The rows as they would come back from the database, carrying the
+	// driver's progress. Progress must not make the journey look different.
+	have := make([]models.OrderStop, len(want))
+	copy(have, want)
+	now := time.Now()
+	have[0].ArrivedAt = &now
+	have[0].StartedAt = &now
+
+	if !sameJourney(have, want) {
+		t.Error("a journey was rebuilt although its points and order had not changed")
+	}
+
+	// A reordered journey is a different one.
+	reordered := make([]models.OrderStop, len(want))
+	copy(reordered, want)
+	reordered[1], reordered[2] = reordered[2], reordered[1]
+	reordered[1].Seq, reordered[2].Seq = reordered[2].Seq, reordered[1].Seq
+	if sameJourney(reordered, want) {
+		t.Error("a reordered journey was taken for the same one")
+	}
+
+	// So is one through a different warehouse.
+	moved := make([]models.OrderStop, len(want))
+	copy(moved, want)
+	moved[2].WarehouseID = "surabaya"
+	if sameJourney(moved, want) {
+		t.Error("a journey through a different warehouse was taken for the same one")
+	}
+}
+
+func TestFirstVisitedFindsTheEarliestStopReached(t *testing.T) {
+	now := time.Now()
+	stops := []models.OrderStop{
+		{Seq: 1, Kind: models.StopLoad, WarehouseID: "jakarta"},
+		{Seq: 2, Kind: models.StopLoad, WarehouseID: "bandung"},
+		{Seq: 3, Kind: models.StopUnload, WarehouseID: "semarang"},
+	}
+	if firstVisited(stops) != nil {
+		t.Fatal("an untouched journey reported a visit")
+	}
+
+	// Each of the three marks counts: a stop that was started or finished has
+	// been reached even if the arrival was never recorded.
+	for _, tc := range []struct {
+		name string
+		set  func(*models.OrderStop)
+	}{
+		{"arrived", func(s *models.OrderStop) { s.ArrivedAt = &now }},
+		{"started", func(s *models.OrderStop) { s.StartedAt = &now }},
+		{"finished", func(s *models.OrderStop) { s.FinishedAt = &now }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := make([]models.OrderStop, len(stops))
+			copy(rows, stops)
+			tc.set(&rows[1])
+			got := firstVisited(rows)
+			if got == nil || got.WarehouseID != "bandung" {
+				t.Fatalf("firstVisited = %v, want the bandung stop", got)
+			}
+		})
 	}
 }
