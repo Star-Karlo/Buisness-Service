@@ -83,7 +83,7 @@ func (s *ShipmentService) StartStop(ctx context.Context, actor Actor, shipmentID
 	// goods are being collected, not signed over. The testing bypass and
 	// admins step past it, as they do at the shipment's own start.
 	if stop.Kind == models.StopUnload && !actor.StatusBypass && actor.Role == models.RoleDriver {
-		if err := s.assertHandoverVerified(ctx, shipmentID, &stop.ID); err != nil {
+		if err := s.assertStopHandover(ctx, shipmentID, order.ID, stop); err != nil {
 			return nil, err
 		}
 	}
@@ -103,6 +103,42 @@ func (s *ShipmentService) StartStop(ctx context.Context, actor Actor, shipmentID
 		return nil, err
 	}
 	return s.reloadStop(ctx, order.ID, stop.ID)
+}
+
+// assertStopHandover checks the right handover for this unloading point.
+//
+// The FIRST unloading point of a journey is verified through the shipment's
+// own OTP — that is where the delivery's stage-level handover was confirmed,
+// and on a two-ended journey it is the only one. Later points each have their
+// own, because the goods change hands again to somebody else.
+//
+// Without the first-point fallback the driver app's mirror of the shipment's
+// start onto stop 1 is refused on every multi-stop order, and that stop is
+// left with no start time even though the driver plainly started there.
+func (s *ShipmentService) assertStopHandover(ctx context.Context, shipmentID, orderID uuid.UUID, stop *models.OrderStop) error {
+	if err := s.assertHandoverVerified(ctx, shipmentID, &stop.ID); err == nil {
+		return nil
+	}
+	if s.isFirstUnloadStop(ctx, orderID, stop) {
+		return s.assertHandoverVerified(ctx, shipmentID, nil)
+	}
+	return s.assertHandoverVerified(ctx, shipmentID, &stop.ID)
+}
+
+// isFirstUnloadStop says whether this is the journey's earliest unloading
+// point in visit order.
+func (s *ShipmentService) isFirstUnloadStop(ctx context.Context, orderID uuid.UUID, stop *models.OrderStop) bool {
+	stops, err := s.stops.ListByOrder(ctx, orderID)
+	if err != nil {
+		return false
+	}
+	for i := range stops {
+		if stops[i].Kind != models.StopUnload {
+			continue
+		}
+		return stops[i].ID == stop.ID
+	}
+	return false
 }
 
 // CheckStopCargo records sesuai / tidak sesuai at one point.

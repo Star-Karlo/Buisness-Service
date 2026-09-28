@@ -78,11 +78,11 @@ func TestLatestForStageFindsAVerifiedHandover(t *testing.T) {
 	issued, _ := issueHandover(t, db, shipment.ID, true)
 	repo := repository.NewHandoverRepository(db)
 
-	if _, err := repo.FindLive(ctx(), shipment.ID, "unloading"); err == nil {
+	if _, err := repo.FindLive(ctx(, nil), shipment.ID, "unloading"); err == nil {
 		t.Error("FindLive answered for a verified handover; the driver's code should no longer be live")
 	}
 
-	latest, err := repo.LatestForStage(ctx(), shipment.ID, "unloading")
+	latest, err := repo.LatestForStage(ctx(, nil), shipment.ID, "unloading")
 	if err != nil {
 		t.Fatalf("LatestForStage after the driver confirmed: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestFieldAttemptsAreCountedApartFromTheDrivers(t *testing.T) {
 		t.Fatalf("RecordAttempt: %v", err)
 	}
 
-	row, err := repo.LatestForStage(ctx(), shipment.ID, "unloading")
+	row, err := repo.LatestForStage(ctx(, nil), shipment.ID, "unloading")
 	if err != nil {
 		t.Fatalf("LatestForStage: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestMarkFieldVerifiedIsRepeatable(t *testing.T) {
 	if err := repo.MarkFieldVerified(ctx(), issued.ID, &user); err != nil {
 		t.Fatalf("MarkFieldVerified: %v", err)
 	}
-	first, _ := repo.LatestForStage(ctx(), shipment.ID, "unloading")
+	first, _ := repo.LatestForStage(ctx(, nil), shipment.ID, "unloading")
 	if first.FieldVerifiedAt == nil {
 		t.Fatal("fieldVerifiedAt is still null after verifying")
 	}
@@ -152,7 +152,7 @@ func TestMarkFieldVerifiedIsRepeatable(t *testing.T) {
 	if err := repo.MarkFieldVerified(ctx(), issued.ID, nil); err != nil {
 		t.Fatalf("MarkFieldVerified a second time: %v", err)
 	}
-	second, _ := repo.LatestForStage(ctx(), shipment.ID, "unloading")
+	second, _ := repo.LatestForStage(ctx(, nil), shipment.ID, "unloading")
 	if second.FieldPICUserID == nil || *second.FieldPICUserID != user {
 		t.Errorf("fieldPicUserId = %v after an anonymous reopen, want it kept as %s", second.FieldPICUserID, user)
 	}
