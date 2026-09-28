@@ -1226,17 +1226,3 @@ func shipmentNoOrFirst(n int16) int16 {
 	}
 	return n
 }
-
-// ItemsByShipment groups an order's cargo by the shipment it belongs to.
-//
-// This is what a stop's plan is: the tonnage, quantity and volume of the
-// items sharing that stop's shipment number. Checking a stop against the
-// whole order's weight instead reads a partial delivery as a shortfall.
-func ItemsByShipment(items []models.OrderItem) map[int16][]models.OrderItem {
-	out := make(map[int16][]models.OrderItem, 2)
-	for i := range items {
-		n := shipmentNoOrFirst(items[i].ShipmentNo)
-		out[n] = append(out[n], items[i])
-	}
-	return out
-}
