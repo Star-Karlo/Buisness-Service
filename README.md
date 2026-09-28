@@ -52,12 +52,29 @@ one unloading point, one set of documents; a multi-shipment order pairs its
 points — `detail.loadingPoints[k]` with `detail.unloadingPoints[k]` is Shipment
 *k+1* — and each pair carries its own cargo and its own paperwork. `order_stops`
 holds one row per point with the `shipment_no` that pairs it, `seq` follows the
-planner's visit order (`detail.stopSequence`, `PUT /orders/:id/stop-sequence`,
-default every Muat then every Bongkar, and a shipment's Bongkar may never
-precede its own Muat), a POD belongs to a stop, and `loaded` / `unloaded` are
-reached only when every stop of that kind is finished. `OrderFlow` reads which
-flow an order runs from the shape of the order rather than a stored flag, so a
-single-shipment order keeps the untouched two-ended path.
+planner's visit order (`detail.stopSequence`, written by
+`PUT /orders/:id/stop-sequence` and its **only** home — migration 000020 dropped
+the `orders.stop_sequence` column 000019 had added for it, unpopulated, because
+two homes for one value is how an order comes to say one thing while the driver
+is sent somewhere else; default every Muat then every Bongkar, a shipment's
+Bongkar may never precede its own Muat, and a rebuild stops at 200 points so the
+numbering keeps fitting its `SMALLINT`), a POD belongs to a stop, and
+`loaded` / `unloaded` are reached only when every stop of that kind is finished.
+`OrderFlow` reads which flow an order runs from the shape of the order rather
+than a stored flag, so a single-shipment order keeps the untouched two-ended
+path.
+
+**The unloading handover is per point too** (000021). `shipment_handovers.stop_id`
+names the visit a code hands over, and NULL means the delivery as a whole — the
+two-ended journey's handover and every row written before this. Issue and verify
+take an optional `stopId`; the PIC the courtesy message goes to is that stop's,
+then the order's, then the site's default, because telling Semarang's receiver
+the Priok code hands the wrong person a code that opens someone else's handover.
+Starting an unloading stop needs that stop's code confirmed, except the
+journey's **first** unloading point, which the shipment's stage-level code covers
+(`assertStopHandover`, `internal/services/stop_visits.go`); loading stops are
+never gated. Each stop reports `handoverVerified` / `handoverVerifiedAt` on the
+shipment read, always false on a loading point.
 
 **Both are the general flow**, and neither belongs to a customer. Per-customer
 differences are differences of *data* — which agreement, which fields an order
