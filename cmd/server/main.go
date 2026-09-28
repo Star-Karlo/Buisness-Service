@@ -275,6 +275,7 @@ func run() error {
 		Ledger:          handlers.NewLedgerHandler(ledgerRepo),
 		Tracking:        handlers.NewTrackingHandler(trackingService),
 		Field:           handlers.NewFieldHandler(handoverService),
+		Stop:            handlers.NewStopHandler(shipmentService),
 	})
 
 	httpSrv := &http.Server{

@@ -187,3 +187,25 @@ func TestDriverTripRoutesCarryNoModulePermission(t *testing.T) {
 		}
 	}
 }
+
+// The stop routes are part of the driver flow, so they carry no module
+// permission — the service checks that the caller is the assigned driver. A
+// 403 here would mean a module gate crept in and every driver's token would
+// need the planner's keys to report an arrival.
+func TestStopRoutesCarryNoModulePermission(t *testing.T) {
+	router := buildRouter(t, "production")
+	nilUUID := "00000000-0000-0000-0000-000000000000"
+
+	for _, path := range []string{
+		"/api/v1/shipments/" + nilUUID + "/stops/" + nilUUID + "/arrive",
+		"/api/v1/shipments/" + nilUUID + "/stops/" + nilUUID + "/start",
+		"/api/v1/shipments/" + nilUUID + "/stops/" + nilUUID + "/cargo-check",
+	} {
+		req := httptest.NewRequest(http.MethodPut, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("PUT %s without a token = %d, want 401", path, rec.Code)
+		}
+	}
+}

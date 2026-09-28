@@ -48,6 +48,7 @@ type Deps struct {
 	MobileTelemetry *handlers.MobileTelemetryHandler
 	Tracking        *handlers.TrackingHandler
 	Field           *handlers.FieldHandler
+	Stop            *handlers.StopHandler
 }
 
 func Setup(d Deps) *gin.Engine {
@@ -203,6 +204,13 @@ func Setup(d Deps) *gin.Engine {
 	// dispatch.read: that key also opens the planner's live fleet map and
 	// driver activity, which a phone has no business holding.
 	shipments.GET("/:id/route", d.Dispatch.ShipmentRoute)
+
+	// One point of a journey. A trip with a stop in the middle has nowhere
+	// to record it on the shipment's own arrival columns, which hold one
+	// loading and one unloading time; these act on the stop.
+	shipments.PUT("/:id/stops/:stopId/arrive", d.Stop.Arrive)
+	shipments.PUT("/:id/stops/:stopId/start", d.Stop.Start)
+	shipments.PUT("/:id/stops/:stopId/cargo-check", d.Stop.CargoCheck)
 
 	shipments.POST("/:id/accept", d.Pod.Accept)
 	shipments.PUT("/:id/cargo-check", d.Pod.CargoCheck)
