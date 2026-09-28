@@ -45,6 +45,28 @@ Refused here where the monolith allowed it: a driver approving an order, a
 shipper assigning a driver, an order skipping draft to completed, a transporter
 marking their own invoice paid.
 
+## Single-shipment and multi-shipment are two flows
+
+One machine, two flows over it. A single-shipment order has one loading point,
+one unloading point, one set of documents; a multi-shipment order pairs its
+points — `detail.loadingPoints[k]` with `detail.unloadingPoints[k]` is Shipment
+*k+1* — and each pair carries its own cargo and its own paperwork. `order_stops`
+holds one row per point with the `shipment_no` that pairs it, `seq` follows the
+planner's visit order (`detail.stopSequence`, `PUT /orders/:id/stop-sequence`,
+default every Muat then every Bongkar, and a shipment's Bongkar may never
+precede its own Muat), a POD belongs to a stop, and `loaded` / `unloaded` are
+reached only when every stop of that kind is finished. `OrderFlow` reads which
+flow an order runs from the shape of the order rather than a stored flag, so a
+single-shipment order keeps the untouched two-ended path.
+
+**Both are the general flow**, and neither belongs to a customer. Per-customer
+differences are differences of *data* — which agreement, which fields an order
+must carry, what a document is called — attaching on top of whichever flow the
+order runs. Nothing here branches on a company. The whole of it is in
+[`../docs/business/MODEL.md`](../docs/business/MODEL.md) §`order_stops` and
+§*Two flows, both general*; the driver's side is
+[`../docs/shared/KTRIP_FLOW.md`](../docs/shared/KTRIP_FLOW.md).
+
 ## Money is exact
 
 Amounts are `decimal.Decimal`, never `float64`. PPN is *added* and PPH23 is
