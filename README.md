@@ -76,6 +76,16 @@ journey's **first** unloading point, which the shipment's stage-level code cover
 never gated. Each stop reports `handoverVerified` / `handoverVerifiedAt` on the
 shipment read, always false on a loading point.
 
+**A line of cargo is numbered too** (000022). `order_items.shipment_no`
+(`SMALLINT NOT NULL DEFAULT 1`, indexed `(order_id, shipment_no)`) pairs items
+the way stops are paired, because **a stop's plan is its own shipment's items**:
+checked against the whole order's weight instead, unloading 2 000 of 4 500 kg at
+Semarang reads as 2 500 kg missing rather than as Shipment 1 delivered in full.
+`shipmentNo` rides on `orderItemRequest` → `OrderItemInput` → `models.OrderItem`,
+absent or below 1 meaning the first, and `ItemsByShipment` groups an order's
+lines into the per-shipment plan — nothing calls it yet; it is there for *Detail
+Muatan* and the per-stop E-POD plan.
+
 **Both are the general flow**, and neither belongs to a customer. Per-customer
 differences are differences of *data* — which agreement, which fields an order
 must carry, what a document is called — attaching on top of whichever flow the
