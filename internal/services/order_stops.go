@@ -59,11 +59,17 @@ func stopsForOrder(order *models.Order) []models.OrderStop {
 		if ref.Index >= len(ids) || ids[ref.Index] == "" {
 			continue
 		}
+		if len(stops) >= maxStopsPerOrder {
+			// A journey with hundreds of points is a bad order, not a long
+			// trip. Stopping here keeps the numbering inside the column's
+			// width instead of wrapping it.
+			break
+		}
 		stop := models.OrderStop{
-			Seq: int16(len(stops) + 1),
+			Seq: stopNo(len(stops) + 1),
 			// The shipment this point belongs to is its position in its own
 			// list, whatever order the truck visits the points in.
-			ShipmentNo:  int16(ref.Index + 1),
+			ShipmentNo:  stopNo(ref.Index + 1),
 			Kind:        ref.Kind,
 			WarehouseID: ids[ref.Index],
 		}
@@ -80,6 +86,21 @@ func stopsForOrder(order *models.Order) []models.OrderStop {
 		stops = append(stops, stop)
 	}
 	return stops
+}
+
+// A journey is allowed many points, but not so many that a stop number stops
+// fitting the column that holds it.
+const maxStopsPerOrder = 200
+
+// stopNo narrows a position to the width the column stores.
+func stopNo(n int) int16 {
+	if n < 1 {
+		return 1
+	}
+	if n > maxStopsPerOrder {
+		return maxStopsPerOrder
+	}
+	return int16(n)
 }
 
 type stopPIC struct{ Name, Phone string }

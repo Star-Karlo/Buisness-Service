@@ -214,7 +214,7 @@ func (s *OrderService) SetStopSequence(ctx context.Context, actor Actor, id uuid
 	} else {
 		raw := make([]interface{}, 0, len(seq))
 		for _, e := range seq {
-			raw = append(raw, map[string]interface{}(e))
+			raw = append(raw, e)
 		}
 		detail["stopSequence"] = raw
 	}
