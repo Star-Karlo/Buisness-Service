@@ -136,6 +136,7 @@ func Setup(d Deps) *gin.Engine {
 	orders.PATCH("/:id/detail", authctx.RequireModule("order.update"), d.Order.PatchDetail)
 	// Geofence enforcement for this one order; null follows the company setting.
 	orders.PUT("/:id/geofencing", authctx.RequireModule("order.update"), d.Order.SetGeofencing)
+	orders.PUT("/:id/stop-sequence", authctx.RequireModule("order.update"), d.Order.SetStopSequence)
 	orders.GET("/:id/history", authctx.RequireModule("order.read"), d.Order.History)
 	orders.GET("/:id/transitions", authctx.RequireModule("order.read"), d.Order.NextStates)
 	orders.PUT("/:id/status", d.Order.Transition)

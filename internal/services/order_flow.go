@@ -1,7 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
+
+	"github.com/google/uuid"
 
 	"github.com/karlo/business-service/internal/models"
 )
@@ -179,4 +182,57 @@ func ValidateStopSequence(order *models.Order) error {
 	return validateSequence(seq,
 		len(warehouseList(order.Detail, "loadingPoints")),
 		len(warehouseList(order.Detail, "unloadingPoints")))
+}
+
+// SetStopSequence stores the visit order a planner chose in Allocate.
+//
+// Kept on the order's detail beside the point lists it indexes, so the choice
+// travels with the thing it describes and a re-derived stop list cannot
+// disagree with it. Writing it rebuilds the stops, which is what makes the
+// choice real: seq is assigned along the sequence, so the driver's "which stop
+// is next" and the routed distance both follow without either knowing a
+// planner touched anything.
+//
+// Passing an empty sequence clears the choice and returns the journey to the
+// default: every Muat, then every Bongkar.
+//
+// The sequence is checked before anything is written. A planner who puts a
+// Bongkar above its own Muat is told which move is impossible — the order is
+// left exactly as it was rather than half-applied.
+func (s *OrderService) SetStopSequence(ctx context.Context, actor Actor, id uuid.UUID, seq []map[string]interface{}) (*models.Order, error) {
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, id)
+	if err != nil {
+		return nil, err
+	}
+
+	detail := map[string]interface{}(order.Detail)
+	if detail == nil {
+		detail = map[string]interface{}{}
+	}
+	if len(seq) == 0 {
+		delete(detail, "stopSequence")
+	} else {
+		raw := make([]interface{}, 0, len(seq))
+		for _, e := range seq {
+			raw = append(raw, map[string]interface{}(e))
+		}
+		detail["stopSequence"] = raw
+	}
+
+	// Validated against the order as it WOULD be, not as it is, so nothing is
+	// written when the answer is no.
+	candidate := *order
+	candidate.Detail = models.JSONB(detail)
+	if err := ValidateStopSequence(&candidate); err != nil {
+		return nil, err
+	}
+
+	if err := s.orders.UpdateFields(ctx, id, map[string]interface{}{"detail": models.JSONB(detail)}); err != nil {
+		return nil, err
+	}
+	order.Detail = models.JSONB(detail)
+	if err := s.SyncStops(ctx, order); err != nil {
+		return nil, err
+	}
+	return order, nil
 }

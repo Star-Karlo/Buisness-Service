@@ -387,6 +387,43 @@ func (h *OrderHandler) SetGeofencing(c *gin.Context) {
 	response.OK(c, order)
 }
 
+type stopSequenceRequest struct {
+	// [{type: "muat"|"bongkar", index: 0}] in the order the truck visits.
+	// An empty list returns the journey to the default.
+	StopSequence []map[string]interface{} `json:"stopSequence"`
+}
+
+// SetStopSequence stores the visit order a planner chose for a multi-shipment
+// order.
+//
+// @Summary  Set an order's stop visit order
+// @Tags     Orders
+// @Security BearerAuth
+// @Param    id path string true "Order ID"
+// @Success  200 {object} models.Order
+// @Router   /orders/{id}/stop-sequence [put]
+func (h *OrderHandler) SetStopSequence(c *gin.Context) {
+	actor, ok := callerActor(c)
+	if !ok {
+		return
+	}
+	id, ok := pathUUID(c)
+	if !ok {
+		return
+	}
+	var req stopSequenceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Kirim {\"stopSequence\": [{\"type\": \"muat\", \"index\": 0}, ...]}")
+		return
+	}
+	order, err := h.orders.SetStopSequence(c.Request.Context(), actor, id, req.StopSequence)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.OK(c, order)
+}
+
 func (h *OrderHandler) History(c *gin.Context) {
 	actor, ok := callerActor(c)
 	if !ok {
