@@ -15,9 +15,17 @@ import (
 // downstream believed that was the trip. This turns the lists into rows so a
 // journey with a stop in the middle has one.
 
-// stopsForOrder derives the visit list. Loading points first in the order the
-// planner listed them, then unloading points, numbered across the whole
-// journey so "which is next" is one comparison.
+// stopsForOrder derives the visit list.
+//
+// Index k of loadingPoints and index k of unloadingPoints are the two ends of
+// shipment k+1, so each stop is stamped with its shipment number: that is what
+// joins a drop-off to the pick-up whose goods it is delivering, and what a
+// per-shipment cargo list, document set or invoice line is looked up by.
+// Without it the rows are a bag of points and Shipment 2 does not exist.
+//
+// The points are then put in the order they will be visited — the planner's,
+// if they chose one, otherwise every load and then every unload — and numbered
+// 1..N along the way, so "which stop is next" stays one comparison.
 //
 // Falls back to the order's two warehouse columns when the detail carries no
 // lists — an order placed through the API rather than the wizard, or one from
@@ -43,29 +51,34 @@ func stopsForOrder(order *models.Order) []models.OrderStop {
 	unloadPICs := picList(order.Detail, "unloadingPics")
 
 	stops := make([]models.OrderStop, 0, len(loads)+len(unloads))
-	seq := int16(1)
-	add := func(kind string, ids []string, pics []stopPIC) {
-		for i, id := range ids {
-			if id == "" {
-				continue
-			}
-			stop := models.OrderStop{Seq: seq, Kind: kind, WarehouseID: id}
-			// The PIC lists are positional, and a planner may have filled
-			// some and not others.
-			if i < len(pics) {
-				if n := pics[i].Name; n != "" {
-					stop.PICName = &n
-				}
-				if p := pics[i].Phone; p != "" {
-					stop.PICPhone = &p
-				}
-			}
-			stops = append(stops, stop)
-			seq++
+	for _, ref := range visitOrder(order, len(loads), len(unloads)) {
+		ids, pics := loads, loadPICs
+		if ref.Kind == models.StopUnload {
+			ids, pics = unloads, unloadPICs
 		}
+		if ref.Index >= len(ids) || ids[ref.Index] == "" {
+			continue
+		}
+		stop := models.OrderStop{
+			Seq: int16(len(stops) + 1),
+			// The shipment this point belongs to is its position in its own
+			// list, whatever order the truck visits the points in.
+			ShipmentNo:  int16(ref.Index + 1),
+			Kind:        ref.Kind,
+			WarehouseID: ids[ref.Index],
+		}
+		// The PIC lists are positional, and a planner may have filled some
+		// and not others.
+		if ref.Index < len(pics) {
+			if n := pics[ref.Index].Name; n != "" {
+				stop.PICName = &n
+			}
+			if p := pics[ref.Index].Phone; p != "" {
+				stop.PICPhone = &p
+			}
+		}
+		stops = append(stops, stop)
 	}
-	add(models.StopLoad, loads, loadPICs)
-	add(models.StopUnload, unloads, unloadPICs)
 	return stops
 }
 
@@ -108,9 +121,17 @@ func picList(detail models.JSONB, key string) []stopPIC {
 }
 
 // SyncStops rebuilds an order's stop list from its detail.
+//
+// The visit order is checked here rather than deeper down because this is the
+// one seam every write passes through: a planner who drags Bongkar 1 above
+// Muat 1 is told so, instead of having the reorder silently ignored and then
+// wondering why the truck still goes the old way.
 func (s *OrderService) SyncStops(ctx context.Context, order *models.Order) error {
 	if s.stops == nil {
 		return nil
+	}
+	if err := ValidateStopSequence(order); err != nil {
+		return err
 	}
 	return s.stops.Replace(ctx, order.ID, stopsForOrder(order))
 }

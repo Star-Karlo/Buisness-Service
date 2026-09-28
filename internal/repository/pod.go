@@ -65,11 +65,21 @@ func (r *PodRepository) Latest(ctx context.Context, shipmentID uuid.UUID) ([]mod
 	return out, nil
 }
 
-// HasApproved says whether a stage already has an approved POD.
-func (r *PodRepository) HasApproved(ctx context.Context, shipmentID uuid.UUID, stage string) (bool, error) {
+// HasApproved says whether this visit already has an approved POD.
+//
+// Scoped to the stop, not the stage, because a journey that unloads twice
+// files two unloading PODs. Judging by stage alone, the approval of the
+// Semarang POD would refuse the Priok one before the driver could file it,
+// and the delivery could never finish. A two-ended journey passes a nil stop
+// and gets the old per-stage answer, which for it is the same answer.
+func (r *PodRepository) HasApproved(ctx context.Context, shipmentID uuid.UUID, stage string, stopID *uuid.UUID) (bool, error) {
+	q := r.db.WithContext(ctx).Model(&models.ShipmentPod{}).
+		Where("shipment_id = ? AND stage = ? AND status = ?", shipmentID, stage, models.PodApproved)
+	if stopID != nil {
+		q = q.Where("stop_id = ?", *stopID)
+	}
 	var n int64
-	err := r.db.WithContext(ctx).Model(&models.ShipmentPod{}).
-		Where("shipment_id = ? AND stage = ? AND status = ?", shipmentID, stage, models.PodApproved).Count(&n).Error
+	err := q.Count(&n).Error
 	return n > 0, err
 }
 

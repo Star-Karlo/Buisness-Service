@@ -112,7 +112,7 @@ func (s *PodService) Submit(ctx context.Context, actor Actor, shipmentID uuid.UU
 		}
 		photos = append(photos, map[string]interface{}{"docType": p.DocType, "fileUrl": p.FileURL})
 	}
-	if approved, err := s.pods.HasApproved(ctx, shipmentID, in.Stage); err != nil {
+	if approved, err := s.pods.HasApproved(ctx, shipmentID, in.Stage, stopID); err != nil {
 		return nil, err
 	} else if approved {
 		return nil, fmt.Errorf("%w: the %s POD is already approved", ErrTransition, in.Stage)

@@ -323,8 +323,13 @@ type OrderStop struct {
 	ID      uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	OrderID uuid.UUID `gorm:"column:order_id;type:uuid;not null" json:"orderId"`
 
-	Seq         int16  `json:"seq"`
-	Kind        string `json:"kind"` // load | unload
+	Seq  int16  `json:"seq"`
+	Kind string `json:"kind"` // load | unload
+
+	// Which shipment of the order this point belongs to, 1-based. A load and
+	// an unload sharing a number are the two ends of one shipment: its cargo,
+	// its weight, its documents. On a single-shipment order every stop is 1.
+	ShipmentNo  int16  `gorm:"column:shipment_no" json:"shipmentNo"`
 	WarehouseID string `gorm:"column:warehouse_id" json:"warehouseId"`
 
 	PICName  *string `gorm:"column:pic_name" json:"picName,omitempty"`
