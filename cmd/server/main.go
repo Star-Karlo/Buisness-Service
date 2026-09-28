@@ -217,6 +217,8 @@ func run() error {
 	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
 	shipmentService.WithDriverFlow(handoverRepo, podRepo)
 	podService := services.NewPodService(podRepo, shipmentRepo, orderRepo, shipmentService, notifier)
+	// So approving one stop's POD closes that visit rather than the delivery.
+	podService.WithStops(orderStopRepo)
 	handoverService.WithDriverFlow(shipmentService, podRepo, cfg.ConsoleBaseURL)
 	trackingService := services.NewTrackingService(trackingLinkRepo, orderRepo, shipmentRepo, orderRouteRepo, authClient, masterDataClient, dispatchService)
 

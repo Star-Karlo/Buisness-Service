@@ -95,6 +95,9 @@ type submitPodRequest struct {
 	Stage  string              `json:"stage" binding:"required"`
 	Photos []services.PodPhoto `json:"photos" binding:"required"`
 	Note   string              `json:"note"`
+	// StopID names the visit, on a journey with more than two points.
+	// Optional: the service resolves the current stop when it is absent.
+	StopID string `json:"stopId"`
 }
 
 // Submit files the driver's POD photos for review.
@@ -119,7 +122,7 @@ func (h *PodHandler) Submit(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	pod, err := h.pods.Submit(c.Request.Context(), actor, id, services.SubmitInput{Stage: req.Stage, Photos: req.Photos, Note: req.Note})
+	pod, err := h.pods.Submit(c.Request.Context(), actor, id, services.SubmitInput{Stage: req.Stage, Photos: req.Photos, Note: req.Note, StopID: req.StopID})
 	if err != nil {
 		writeError(c, err)
 		return

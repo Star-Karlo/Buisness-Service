@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -24,6 +25,15 @@ type PodService struct {
 	orders    *repository.OrderRepository
 	lifecycle *ShipmentService
 	notifier  clients.Notifier
+	// stops is the journey's visit list. Nil, or a POD with no stop, means a
+	// two-ended trip and the original behaviour. Optional (tests).
+	stops *repository.OrderStopRepository
+}
+
+// WithStops lets an approval close one visit rather than the whole delivery.
+func (s *PodService) WithStops(stops *repository.OrderStopRepository) *PodService {
+	s.stops = stops
+	return s
 }
 
 func NewPodService(pods *repository.PodRepository, shipments *repository.ShipmentRepository, orders *repository.OrderRepository, lifecycle *ShipmentService, notifier clients.Notifier) *PodService {
@@ -41,6 +51,10 @@ type SubmitInput struct {
 	Stage  string
 	Photos []PodPhoto
 	Note   string
+	// StopID names the visit this POD closes. Empty on a two-ended journey;
+	// the service resolves the current stop itself when the caller does not
+	// say, so an app that has not learned about stops still behaves.
+	StopID string
 }
 
 var podDocTypes = map[string]bool{"suratJalan": true, "muatan": true, "pendukung": true}
@@ -84,6 +98,10 @@ func (s *PodService) Submit(ctx context.Context, actor Actor, shipmentID uuid.UU
 	if len(in.Photos) == 0 {
 		return nil, fmt.Errorf("%w: at least one photo is required", ErrValidation)
 	}
+	// Which visit this POD closes. An explicit stop wins; otherwise it is the
+	// first unfinished stop of this stage, which is where the driver is.
+	stopID := s.resolveStop(ctx, order.ID, in)
+
 	photos := make(models.JSONArray, 0, len(in.Photos))
 	for _, p := range in.Photos {
 		if !podDocTypes[p.DocType] {
@@ -103,6 +121,7 @@ func (s *PodService) Submit(ctx context.Context, actor Actor, shipmentID uuid.UU
 	pod := &models.ShipmentPod{
 		ShipmentID:        shipmentID,
 		Stage:             in.Stage,
+		StopID:            stopID,
 		Photos:            photos,
 		Status:            models.PodSubmitted,
 		SubmittedByUserID: &actor.UserID,
@@ -172,6 +191,22 @@ func (s *PodService) Review(ctx context.Context, actor Actor, shipmentID, podID 
 	}
 	pod.Status = models.PodApproved
 
+	// The visit this POD closes, on a journey with more than two points.
+	// Recorded before the shipment moves, because whether the shipment moves
+	// at all depends on whether any stop is still waiting.
+	done, remaining, err := s.closeStop(ctx, pod, order.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !done {
+		// More stops of this kind to come. The delivery is not finished;
+		// the driver's next arrival continues it.
+		s.notify(ctx, actor, order, "podApproved", pod.Stage, "", driverOf(shipment))
+		slog.InfoContext(ctx, "stop closed, journey continues",
+			"shipmentId", shipment.ID, "stage", pod.Stage, "stopsRemaining", remaining)
+		return pod, nil
+	}
+
 	// The step the approval means. Taken as the system, on the reviewer's
 	// behalf; the state machine still checks the shipment is where the
 	// stage says it is.
@@ -193,6 +228,77 @@ func (s *PodService) Review(ctx context.Context, actor Actor, shipmentID, podID 
 	}
 	s.notify(ctx, actor, order, "podApproved", pod.Stage, "", driverOf(shipment))
 	return pod, nil
+}
+
+// resolveStop decides which visit a submission belongs to.
+//
+// The driver app names the stop once it knows about stops; until then — and
+// on a two-ended journey — the server works it out, because the alternative
+// is a POD that closes nothing and a delivery that never finishes.
+func (s *PodService) resolveStop(ctx context.Context, orderID uuid.UUID, in SubmitInput) *uuid.UUID {
+	if s.stops == nil {
+		return nil
+	}
+	if in.StopID != "" {
+		if id, err := uuid.Parse(in.StopID); err == nil {
+			return &id
+		}
+	}
+	stops, err := s.stops.ListByOrder(ctx, orderID)
+	if err != nil || len(stops) == 0 {
+		return nil
+	}
+	kind := models.StopUnload
+	if in.Stage == "loading" {
+		kind = models.StopLoad
+	}
+	for i := range stops {
+		if stops[i].Kind == kind && stops[i].FinishedAt == nil {
+			id := stops[i].ID
+			return &id
+		}
+	}
+	return nil
+}
+
+// closeStop marks the visit this POD belongs to as finished, and says whether
+// the journey's stops of that kind are now all done.
+//
+// A delivery that unloads at Semarang and then at Priok files two unloading
+// PODs. Without this, approving the first advanced the shipment to unloaded
+// and finished — the second stop was never visited and the order was closed
+// from a warehouse the goods had not reached. A journey with no stops
+// recorded is "done" by definition, which is what keeps two-ended trips and
+// everything filed before stops existed behaving exactly as before.
+func (s *PodService) closeStop(ctx context.Context, pod *models.ShipmentPod, orderID uuid.UUID) (done bool, remaining int, err error) {
+	if s.stops == nil || pod.StopID == nil {
+		return true, 0, nil
+	}
+	now := time.Now()
+	if err := s.stops.UpdateFields(ctx, *pod.StopID, map[string]interface{}{
+		"finished_at": now,
+		"pod_id":      pod.ID,
+	}); err != nil {
+		return false, 0, err
+	}
+
+	kind := models.StopUnload
+	if pod.Stage == "loading" {
+		kind = models.StopLoad
+	}
+	stops, err := s.stops.ListByOrder(ctx, orderID)
+	if err != nil {
+		// Unknown rather than wrong: refusing to advance would strand the
+		// delivery, and advancing blindly would close it early. The safer
+		// of the two is to carry on as a two-ended trip would.
+		return true, 0, nil
+	}
+	for i := range stops {
+		if stops[i].Kind == kind && stops[i].FinishedAt == nil && stops[i].ID != *pod.StopID {
+			remaining++
+		}
+	}
+	return remaining == 0, remaining, nil
 }
 
 // CargoCheck records the "sesuai / tidak sesuai" answer for a stage from an

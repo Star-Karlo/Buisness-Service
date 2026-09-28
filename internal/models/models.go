@@ -578,6 +578,11 @@ type ShipmentPod struct {
 	Status          string  `gorm:"not null" json:"status"`
 	RejectionReason *string `json:"rejectionReason,omitempty"`
 
+	// StopID names the visit this POD closes, on a journey with more than two
+	// points. Nil on a two-ended trip and on everything filed before stops
+	// existed. See migrations/000018.
+	StopID *uuid.UUID `gorm:"column:stop_id;type:uuid" json:"stopId,omitempty"`
+
 	SubmittedByUserID *uuid.UUID `gorm:"type:uuid" json:"submittedByUserId,omitempty"`
 	SubmittedAt       time.Time  `json:"submittedAt"`
 	ReviewedByUserID  *uuid.UUID `gorm:"type:uuid" json:"reviewedByUserId,omitempty"`

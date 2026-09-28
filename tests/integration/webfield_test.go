@@ -308,3 +308,61 @@ func TestListInboundForCompanyCoversBothSidesOfTheOrder(t *testing.T) {
 		t.Errorf("inbox missed a side of the order: shipper %v, transporter %v", seen[asShipper], seen[asTransporter])
 	}
 }
+
+// A delivery with two unloading points must not finish at the first one.
+//
+// Approving an unloading POD advances the shipment to unloaded and finished.
+// On a journey that unloads at Semarang and then at Priok, doing that on the
+// first approval closes the order from a warehouse the goods have not reached
+// — which is what happened before PODs knew which stop they belonged to.
+func TestStopsCloseOneVisitAtATime(t *testing.T) {
+	db := testDB(t)
+	resetTables(t, db)
+
+	order := seedOrder(t, db, models.OrderAssigned)
+	stops := []models.OrderStop{
+		{Seq: 1, Kind: models.StopLoad, WarehouseID: "WH-JKT"},
+		{Seq: 2, Kind: models.StopUnload, WarehouseID: "WH-SMG"},
+		{Seq: 3, Kind: models.StopUnload, WarehouseID: "WH-PRIOK"},
+	}
+	repo := repository.NewOrderStopRepository(db)
+	if err := repo.Replace(ctx(), order.ID, stops); err != nil {
+		t.Fatalf("seeding stops: %v", err)
+	}
+
+	got, err := repo.ListByOrder(ctx(), order.ID)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("ListByOrder = %d stops, %v; want 3", len(got), err)
+	}
+	if got[0].Seq != 1 || got[2].WarehouseID != "WH-PRIOK" {
+		t.Errorf("stops came back out of visit order: %+v", got)
+	}
+
+	// Finish Semarang only.
+	if err := repo.UpdateFields(ctx(), got[1].ID, map[string]interface{}{"finished_at": time.Now().UTC()}); err != nil {
+		t.Fatalf("finishing the first unload: %v", err)
+	}
+
+	after, _ := repo.ListByOrder(ctx(), order.ID)
+	unfinished := 0
+	for _, s := range after {
+		if s.Kind == models.StopUnload && s.FinishedAt == nil {
+			unfinished++
+		}
+	}
+	if unfinished != 1 {
+		t.Fatalf("%d unloading stops still open, want 1 — Priok must still be waiting", unfinished)
+	}
+
+	// Replace is how a re-plan rewrites the journey; it must not duplicate.
+	if err := repo.Replace(ctx(), order.ID, []models.OrderStop{
+		{Seq: 1, Kind: models.StopLoad, WarehouseID: "WH-JKT"},
+		{Seq: 2, Kind: models.StopUnload, WarehouseID: "WH-PRIOK"},
+	}); err != nil {
+		t.Fatalf("replacing the journey: %v", err)
+	}
+	replaced, _ := repo.ListByOrder(ctx(), order.ID)
+	if len(replaced) != 2 {
+		t.Errorf("after replace: %d stops, want 2 — the old journey must not linger", len(replaced))
+	}
+}
