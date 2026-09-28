@@ -128,7 +128,9 @@ func (s *HandoverService) fieldResolve(ctx context.Context, orderNumber string) 
 	if err != nil {
 		return nil, nil, nil, notFound
 	}
-	row, err := s.handovers.LatestForStage(ctx, shipment.ID, "unloading")
+	// nil: Web-Field has no per-stop page yet, so it still asks the
+	// stage-level question. Unchanged behaviour while it stays hidden.
+	row, err := s.handovers.LatestForStage(ctx, shipment.ID, "unloading", nil)
 	if err != nil {
 		return nil, nil, nil, notFound
 	}
@@ -338,7 +340,7 @@ func (s *HandoverService) FieldInbox(ctx context.Context, actor Actor) ([]FieldI
 			ArrivedAt:      shipments[i].ArrivedUnloadingAt,
 		}
 		s.fillParties(ctx, &shipments[i], &order, &row.Truck, &row.Driver, &row.Destination)
-		if h, err := s.handovers.LatestForStage(ctx, shipments[i].ID, "unloading"); err == nil && h.VerifiedAt != nil {
+		if h, err := s.handovers.LatestForStage(ctx, shipments[i].ID, "unloading", nil); err == nil && h.VerifiedAt != nil {
 			row.Ready = time.Since(h.SentAt) <= fieldCodeWindow
 		}
 		out = append(out, row)

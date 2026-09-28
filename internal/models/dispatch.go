@@ -252,6 +252,12 @@ type ShipmentHandover struct {
 	ShipmentID uuid.UUID `gorm:"column:shipment_id;type:uuid;not null" json:"shipmentId"`
 	Stage      string    `json:"stage"`
 
+	// The visit this code hands over. NULL is the whole stage, which is what a
+	// two-ended journey has: one handover for the delivery. A journey that
+	// unloads twice issues one per unloading stop, because the goods change
+	// hands twice, to two different people.
+	StopID *uuid.UUID `gorm:"column:stop_id;type:uuid" json:"stopId,omitempty"`
+
 	PICName     *string `gorm:"column:pic_name" json:"picName,omitempty"`
 	PICWhatsApp string  `gorm:"column:pic_whatsapp" json:"picWhatsapp"`
 
@@ -350,6 +356,14 @@ type OrderStop struct {
 	// Site is filled on read from master data, so a caller has the address and
 	// the pin without a second call. Not a column.
 	Site *TripSiteRef `gorm:"-" json:"site,omitempty"`
+
+	// HandoverVerified says whether this visit's receiver has confirmed the
+	// driver's code. Filled on read from the handover register, so the driver
+	// app can tell an unloading point that still needs an OTP from one that
+	// is ready to start. Always false on a loading point: goods are collected
+	// there, not signed over. Not columns.
+	HandoverVerified   bool       `gorm:"-" json:"handoverVerified"`
+	HandoverVerifiedAt *time.Time `gorm:"-" json:"handoverVerifiedAt,omitempty"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

@@ -214,7 +214,8 @@ func run() error {
 	dispatchService.WithStops(orderStopRepo)
 	orderService.WithStops(orderStopRepo)
 	shipmentService.WithStops(orderStopRepo)
-	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
+	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier).
+		WithStops(orderStopRepo)
 	shipmentService.WithDriverFlow(handoverRepo, podRepo)
 	podService := services.NewPodService(podRepo, shipmentRepo, orderRepo, shipmentService, notifier)
 	// So approving one stop's POD closes that visit rather than the delivery.

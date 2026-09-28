@@ -54,11 +54,19 @@ type HandoverService struct {
 	// unloading POD's state. Both optional (tests).
 	lifecycle *ShipmentService
 	pods      *repository.PodRepository
+	// stops names who answers at one visit, so a code goes to the PIC of the
+	// point being handed over rather than the order's first one.
+	stops *repository.OrderStopRepository
 	// consoleBaseURL builds the Web-Field link the PIC gets on WhatsApp.
 	consoleBaseURL string
 }
 
 // WithDriverFlow wires the shipment lifecycle and POD register in.
+func (s *HandoverService) WithStops(stops *repository.OrderStopRepository) *HandoverService {
+	s.stops = stops
+	return s
+}
+
 func (s *HandoverService) WithDriverFlow(lifecycle *ShipmentService, pods *repository.PodRepository, consoleBaseURL string) *HandoverService {
 	s.lifecycle, s.pods, s.consoleBaseURL = lifecycle, pods, strings.TrimRight(consoleBaseURL, "/")
 	return s
@@ -145,7 +153,7 @@ type IssueResult struct {
 }
 
 // Issue creates the unloading code and delivers it to the driver.
-func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uuid.UUID, picName, picWhatsApp string) (*IssueResult, error) {
+func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uuid.UUID, stopID *uuid.UUID, picName, picWhatsApp string) (*IssueResult, error) {
 	shipment, err := s.shipments.FindByID(ctx, shipmentID)
 	if err != nil {
 		return nil, err
@@ -159,9 +167,12 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	// asking again at the gate only invites a wrong number. An explicit
 	// argument still wins, for the case where the named PIC is not the one
 	// standing there.
+	// Who receives it depends on WHICH unloading point this is: Semarang's
+	// PIC has no part in the Priok handover. The stop's own PIC comes first,
+	// then the order's, then the site default.
 	order, _ := s.orders.FindByIDForService(ctx, shipment.OrderID)
 	if strings.TrimSpace(picName) == "" && strings.TrimSpace(picWhatsApp) == "" {
-		picName, picWhatsApp = s.picForUnloading(ctx, order)
+		picName, picWhatsApp = s.picForStop(ctx, order, stopID)
 	}
 
 	// An unreachable PIC is not an error: they can still walk up to the
@@ -191,6 +202,7 @@ func (s *HandoverService) Issue(ctx context.Context, actor Actor, shipmentID uui
 	row := &models.ShipmentHandover{
 		ShipmentID:    shipmentID,
 		Stage:         "unloading",
+		StopID:        stopID,
 		PICWhatsApp:   number,
 		CodeHash:      sum[:],
 		CodeRecipient: "driver",
@@ -292,6 +304,9 @@ func (s *HandoverService) notifyWarehousePICs(ctx context.Context, shipment *mod
 // VerifyInput is the driver's attempt.
 type VerifyInput struct {
 	Code string
+	// StopID is which unloading point is being handed over. Nil is the
+	// delivery as a whole, which is what a two-ended journey has.
+	StopID *uuid.UUID
 	// Latitude and Longitude are where the driver was. Recorded alongside the
 	// verification so the geofence check has a position to judge, and so a
 	// dispute has the coordinate rather than only a timestamp.
@@ -316,7 +331,7 @@ func (s *HandoverService) Verify(ctx context.Context, actor Actor, shipmentID uu
 		return nil, fmt.Errorf("%w: only the assigned driver may complete a handover", ErrForbidden)
 	}
 
-	live, err := s.handovers.FindLive(ctx, shipmentID, "unloading")
+	live, err := s.handovers.FindLive(ctx, shipmentID, "unloading", in.StopID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, fmt.Errorf("%w: no handover code has been requested", ErrValidation)
@@ -610,3 +625,28 @@ func normaliseWhatsApp(raw string) (string, error) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// picForStop names who answers at one unloading point.
+//
+// A journey that unloads twice has two receivers, and messaging the first
+// about the second delivery is worse than messaging nobody: it tells the wrong
+// person a code that opens someone else's handover. The stop's own PIC is
+// therefore preferred over the order-level one, which is only a sensible
+// answer when the journey has a single unloading point.
+func (s *HandoverService) picForStop(ctx context.Context, order *models.Order, stopID *uuid.UUID) (string, string) {
+	if stopID != nil && s.stops != nil {
+		if stop, err := s.stops.FindByID(ctx, *stopID); err == nil && stop != nil {
+			name, phone := "", ""
+			if stop.PICName != nil {
+				name = strings.TrimSpace(*stop.PICName)
+			}
+			if stop.PICPhone != nil {
+				phone = strings.TrimSpace(*stop.PICPhone)
+			}
+			if name != "" || phone != "" {
+				return name, phone
+			}
+		}
+	}
+	return s.picForUnloading(ctx, order)
+}

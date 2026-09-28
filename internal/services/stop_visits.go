@@ -76,6 +76,17 @@ func (s *ShipmentService) StartStop(ctx context.Context, actor Actor, shipmentID
 	if stop.StartedAt != nil {
 		return stop, nil
 	}
+	// Unloading hands the goods to somebody, and that somebody confirms the
+	// driver's code first — at THIS point, with the PIC named on it. Without
+	// the per-stop check a driver could unload at Priok on the strength of
+	// the code Semarang's receiver confirmed. Loading has no handover: the
+	// goods are being collected, not signed over. The testing bypass and
+	// admins step past it, as they do at the shipment's own start.
+	if stop.Kind == models.StopUnload && !actor.StatusBypass && actor.Role == models.RoleDriver {
+		if err := s.assertHandoverVerified(ctx, shipmentID, &stop.ID); err != nil {
+			return nil, err
+		}
+	}
 	// Same rule as the shipment's own start: being at the gate is what
 	// permits the work, and an enforced order says so with a position.
 	if s.geofencingEnforced(ctx, order) {

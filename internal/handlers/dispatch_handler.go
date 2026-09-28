@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -421,6 +422,9 @@ func NewHandoverHandler(h *services.HandoverService) *HandoverHandler {
 }
 
 type issueHandoverRequest struct {
+	// StopID names which unloading point the code is for. Absent is the
+	// delivery as a whole, which is what a two-ended journey sends.
+	StopID  string `json:"stopId"`
 	PICName string `json:"picName"`
 	// Optional since Web-Field: the PIC's number addresses the courtesy
 	// message with the field link, never the code.
@@ -456,7 +460,7 @@ func (h *HandoverHandler) Issue(c *gin.Context) {
 		return
 	}
 
-	issued, err := h.handovers.Issue(c.Request.Context(), actor, id, req.PICName, req.PICWhatsapp)
+	issued, err := h.handovers.Issue(c.Request.Context(), actor, id, optionalStopID(req.StopID), req.PICName, req.PICWhatsapp)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -484,9 +488,26 @@ func (h *HandoverHandler) Issue(c *gin.Context) {
 }
 
 type verifyHandoverRequest struct {
-	Code      string   `json:"code" binding:"required"`
+	Code string `json:"code" binding:"required"`
+	// StopID names which unloading point is being handed over. Absent is the
+	// delivery as a whole, which is what a two-ended journey sends.
+	StopID    string   `json:"stopId"`
 	Latitude  *float64 `json:"latitude"`
 	Longitude *float64 `json:"longitude"`
+}
+
+// optionalStopID reads a stop from a request body. An unparseable value is
+// treated as absent rather than refused, so a client that sends "" for "no
+// stop" keeps working.
+func optionalStopID(raw string) *uuid.UUID {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return nil
+	}
+	return &id
 }
 
 // Verify checks the code the PIC read out.
@@ -514,7 +535,8 @@ func (h *HandoverHandler) Verify(c *gin.Context) {
 	}
 
 	row, err := h.handovers.Verify(c.Request.Context(), actor, id, services.VerifyInput{
-		Code: req.Code, Latitude: req.Latitude, Longitude: req.Longitude,
+		Code: req.Code, StopID: optionalStopID(req.StopID),
+		Latitude: req.Latitude, Longitude: req.Longitude,
 	})
 	if err != nil {
 		writeError(c, err)

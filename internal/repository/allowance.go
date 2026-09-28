@@ -129,20 +129,34 @@ func NewHandoverRepository(db *gorm.DB) *HandoverRepository {
 // what enforces one live code, so the old row is deleted rather than left.
 func (r *HandoverRepository) Issue(ctx context.Context, h *models.ShipmentHandover) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("shipment_id = ? AND stage = ? AND verified_at IS NULL",
-			h.ShipmentID, h.Stage).Delete(&models.ShipmentHandover{}).Error; err != nil {
+		q := tx.Where("shipment_id = ? AND stage = ? AND verified_at IS NULL", h.ShipmentID, h.Stage)
+		// Only this visit's live code is retired. Issuing Priok's code must
+		// not delete the one Semarang is still waiting on.
+		q = scopeToStop(q, h.StopID)
+		if err := q.Delete(&models.ShipmentHandover{}).Error; err != nil {
 			return err
 		}
 		return tx.Create(h).Error
 	})
 }
 
-// FindLive returns the unverified code for a shipment stage.
-func (r *HandoverRepository) FindLive(ctx context.Context, shipmentID uuid.UUID, stage string) (*models.ShipmentHandover, error) {
+// scopeToStop narrows a handover query to one visit, or to the stage-level
+// handover when there is no stop. Written once because getting it wrong in one
+// place hands a driver another stop's code.
+func scopeToStop(q *gorm.DB, stopID *uuid.UUID) *gorm.DB {
+	if stopID == nil {
+		return q.Where("stop_id IS NULL")
+	}
+	return q.Where("stop_id = ?", *stopID)
+}
+
+// FindLive returns the unverified code for one visit, or for the stage when
+// the journey has no stops of its own.
+func (r *HandoverRepository) FindLive(ctx context.Context, shipmentID uuid.UUID, stage string, stopID *uuid.UUID) (*models.ShipmentHandover, error) {
 	var row models.ShipmentHandover
-	err := r.db.WithContext(ctx).
-		Where("shipment_id = ? AND stage = ? AND verified_at IS NULL", shipmentID, stage).
-		First(&row).Error
+	q := scopeToStop(r.db.WithContext(ctx).
+		Where("shipment_id = ? AND stage = ? AND verified_at IS NULL", shipmentID, stage), stopID)
+	err := q.First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
@@ -152,11 +166,11 @@ func (r *HandoverRepository) FindLive(ctx context.Context, shipmentID uuid.UUID,
 // IsVerified says whether a stage's handover code has been confirmed, and
 // when. The timestamp is what the order's timeline shows for "OTP bongkar
 // terverifikasi"; without it the step had to borrow another event's time.
-func (r *HandoverRepository) IsVerified(ctx context.Context, shipmentID uuid.UUID, stage string) (bool, *time.Time, error) {
+func (r *HandoverRepository) IsVerified(ctx context.Context, shipmentID uuid.UUID, stage string, stopID *uuid.UUID) (bool, *time.Time, error) {
 	var rows []models.ShipmentHandover
-	err := r.db.WithContext(ctx).
-		Where("shipment_id = ? AND stage = ? AND verified_at IS NOT NULL", shipmentID, stage).
-		Order("verified_at ASC").Limit(1).Find(&rows).Error
+	q := scopeToStop(r.db.WithContext(ctx).
+		Where("shipment_id = ? AND stage = ? AND verified_at IS NOT NULL", shipmentID, stage), stopID)
+	err := q.Order("verified_at ASC").Limit(1).Find(&rows).Error
 	if err != nil || len(rows) == 0 {
 		return false, nil, err
 	}
@@ -177,11 +191,11 @@ func (r *HandoverRepository) FindByFieldToken(ctx context.Context, token string)
 // not. FindLive answers the driver's question ("is there a code I can use");
 // this answers Web-Field's ("what code was issued for this delivery"), which
 // must still resolve after the driver has confirmed it.
-func (r *HandoverRepository) LatestForStage(ctx context.Context, shipmentID uuid.UUID, stage string) (*models.ShipmentHandover, error) {
+func (r *HandoverRepository) LatestForStage(ctx context.Context, shipmentID uuid.UUID, stage string, stopID *uuid.UUID) (*models.ShipmentHandover, error) {
 	var row models.ShipmentHandover
-	err := r.db.WithContext(ctx).
-		Where("shipment_id = ? AND stage = ?", shipmentID, stage).
-		Order("sent_at DESC").First(&row).Error
+	q := scopeToStop(r.db.WithContext(ctx).
+		Where("shipment_id = ? AND stage = ?", shipmentID, stage), stopID)
+	err := q.Order("sent_at DESC").First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
@@ -307,4 +321,29 @@ func (r *AllowanceRepository) ListByCompany(ctx context.Context, companyID uuid.
 		Offset(offset).Limit(limit).
 		Scan(&rows).Error
 	return rows, total, err
+}
+
+// VerifiedStopIDs is which of a shipment's visits have had their handover
+// confirmed, so a read can say so on every stop in one query rather than one
+// per stop.
+func (r *HandoverRepository) VerifiedStopIDs(ctx context.Context, shipmentID uuid.UUID) (map[uuid.UUID]time.Time, error) {
+	var rows []models.ShipmentHandover
+	err := r.db.WithContext(ctx).
+		Where("shipment_id = ? AND stop_id IS NOT NULL AND verified_at IS NOT NULL", shipmentID).
+		Order("verified_at ASC").Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]time.Time, len(rows))
+	for i := range rows {
+		if rows[i].StopID == nil || rows[i].VerifiedAt == nil {
+			continue
+		}
+		// The first confirmation is the one the timeline shows; a later row
+		// for the same stop would be a re-issue after it was already done.
+		if _, seen := out[*rows[i].StopID]; !seen {
+			out[*rows[i].StopID] = *rows[i].VerifiedAt
+		}
+	}
+	return out, nil
 }

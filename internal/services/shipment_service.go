@@ -68,11 +68,41 @@ func (s *ShipmentService) decorate(ctx context.Context, shipment *models.Shipmen
 	s.fillTripSites(ctx, shipment)
 	s.fillStops(ctx, shipment)
 	if s.handovers != nil {
-		if ok, at, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading"); err == nil {
+		// The shipment-level answer is the delivery's own handover, which is
+		// what a two-ended journey has and what the app reads today.
+		if ok, at, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading", nil); err == nil {
 			shipment.HandoverVerified, shipment.HandoverVerifiedAt = ok, at
 		}
+		s.fillStopHandovers(ctx, shipment)
 	}
 	return shipment
+}
+
+// fillStopHandovers says, per visit, whether its receiver's code has been
+// confirmed.
+//
+// Answered in one query rather than one per stop, and only for unloading
+// points, because a loading point has no handover: the goods are being
+// collected, not signed over.
+func (s *ShipmentService) fillStopHandovers(ctx context.Context, shipment *models.Shipment) {
+	if s.handovers == nil || len(shipment.Stops) == 0 {
+		return
+	}
+	verified, err := s.handovers.VerifiedStopIDs(ctx, shipment.ID)
+	if err != nil {
+		return
+	}
+	for i := range shipment.Stops {
+		if shipment.Stops[i].Kind != models.StopUnload {
+			continue
+		}
+		at, ok := verified[shipment.Stops[i].ID]
+		shipment.Stops[i].HandoverVerified = ok
+		if ok {
+			t := at
+			shipment.Stops[i].HandoverVerifiedAt = &t
+		}
+	}
 }
 
 // fillStops attaches the journey's visit list, each with its site resolved.
@@ -209,7 +239,10 @@ func (s *ShipmentService) Advance(ctx context.Context, actor Actor, in AdvanceIn
 	// Starting to unload needs the PIC's code confirmed first (the driver
 	// flow's OTP page). The testing bypass and admins step past it.
 	if in.To == models.ShipmentUnloading && !actor.StatusBypass && actor.Role == models.RoleDriver {
-		if err := s.assertHandoverVerified(ctx, shipment.ID); err != nil {
+		// The shipment-level step is the first unloading point's, so it asks
+		// about the delivery's own handover. Later points go through
+		// StartStop, which asks about that stop's.
+		if err := s.assertHandoverVerified(ctx, shipment.ID, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -225,11 +258,14 @@ func (s *ShipmentService) AdvanceBySystem(ctx context.Context, actor Actor, ship
 	return s.advance(ctx, actor, shipment, order, AdvanceInput{ShipmentID: shipment.ID, To: to}, models.RoleSystem)
 }
 
-func (s *ShipmentService) assertHandoverVerified(ctx context.Context, shipmentID uuid.UUID) error {
+// assertHandoverVerified refuses to start unloading before the receiver's
+// code has been confirmed. A stop names which handover is meant; nil asks
+// about the delivery as a whole, which is the two-ended journey's answer.
+func (s *ShipmentService) assertHandoverVerified(ctx context.Context, shipmentID uuid.UUID, stopID *uuid.UUID) error {
 	if s.handovers == nil {
 		return nil
 	}
-	ok, _, err := s.handovers.IsVerified(ctx, shipmentID, "unloading")
+	ok, _, err := s.handovers.IsVerified(ctx, shipmentID, "unloading", stopID)
 	if err != nil {
 		return err
 	}

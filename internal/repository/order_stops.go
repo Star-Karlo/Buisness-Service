@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -69,4 +70,14 @@ func (r *OrderStopRepository) Upsert(ctx context.Context, stop *models.OrderStop
 		Columns:   []clause.Column{{Name: "order_id"}, {Name: "seq"}},
 		DoUpdates: clause.AssignmentColumns([]string{"kind", "warehouse_id", "pic_name", "pic_phone", "updated_at"}),
 	}).Create(stop).Error
+}
+
+// FindByID returns one visit.
+func (r *OrderStopRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.OrderStop, error) {
+	var row models.OrderStop
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &row, err
 }
