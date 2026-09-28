@@ -87,12 +87,18 @@ func (s *ShipmentService) fillTripSites(ctx context.Context, shipment *models.Sh
 		if err != nil {
 			return nil
 		}
-		return &models.TripSite{
+		site := &models.TripSite{
 			ID: w.GetId(), Name: w.GetName(), Address: w.GetAddress(), City: w.GetCityId(),
 			Latitude: w.GetLatitude(), Longitude: w.GetLongitude(),
 			GeofenceRadiusMeters: int(w.GetGeofenceRadiusMeters()),
 			PICName:              w.GetPicName(), PICPhone: w.GetPicPhone(),
 		}
+		for _, p := range w.GetPics() {
+			site.PICs = append(site.PICs, models.TripPIC{
+				ID: p.GetId(), Name: p.GetName(), Phone: p.GetPhone(), IsDefault: p.GetIsDefault(),
+			})
+		}
+		return site
 	}
 	shipment.OriginWarehouse = site(order.OriginWarehouseID)
 	shipment.DestinationWarehouse = site(order.DestinationWarehouseID)

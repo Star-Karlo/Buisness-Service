@@ -535,6 +535,18 @@ type TripSite struct {
 	GeofenceRadiusMeters int     `json:"geofenceRadiusMeters,omitempty"`
 	PICName              string  `json:"picName,omitempty"`
 	PICPhone             string  `json:"picPhone,omitempty"`
+	// PICs is the site's whole gate list. The driver app offers it when the
+	// PIC named on the order is not the one on duty, so the replacement is a
+	// registered colleague rather than a number typed at a gate.
+	PICs []TripPIC `json:"pics,omitempty"`
+}
+
+// TripPIC is one contact at a trip's site.
+type TripPIC struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Phone     string `json:"phone,omitempty"`
+	IsDefault bool   `json:"isDefault,omitempty"`
 }
 
 // POD submission states.
