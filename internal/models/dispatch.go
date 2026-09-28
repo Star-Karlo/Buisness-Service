@@ -308,3 +308,62 @@ type TrackingLink struct {
 }
 
 func (TrackingLink) TableName() string { return "order_tracking_links" }
+
+// ---------------------------------------------------------------------------
+// Journey stops
+// ---------------------------------------------------------------------------
+
+// OrderStop is one point a journey must visit.
+//
+// An order used to be two warehouses, and every point between them lived as
+// text in its detail that nothing on the server read — so a three-point
+// journey was routed, priced and tracked as though the middle did not exist.
+// See migrations/000016.
+type OrderStop struct {
+	ID      uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	OrderID uuid.UUID `gorm:"column:order_id;type:uuid;not null" json:"orderId"`
+
+	Seq         int16  `json:"seq"`
+	Kind        string `json:"kind"` // load | unload
+	WarehouseID string `gorm:"column:warehouse_id" json:"warehouseId"`
+
+	PICName  *string `gorm:"column:pic_name" json:"picName,omitempty"`
+	PICPhone *string `gorm:"column:pic_phone" json:"picPhone,omitempty"`
+
+	ArrivedAt        *time.Time `gorm:"column:arrived_at" json:"arrivedAt,omitempty"`
+	ArrivedLatitude  *Money     `gorm:"column:arrived_latitude;type:numeric(10,7)" json:"arrivedLatitude,omitempty"`
+	ArrivedLongitude *Money     `gorm:"column:arrived_longitude;type:numeric(10,7)" json:"arrivedLongitude,omitempty"`
+	WithinGeofence   *bool      `gorm:"column:within_geofence" json:"withinGeofence,omitempty"`
+	StartedAt        *time.Time `gorm:"column:started_at" json:"startedAt,omitempty"`
+	FinishedAt       *time.Time `gorm:"column:finished_at" json:"finishedAt,omitempty"`
+
+	CargoMatches   *bool      `gorm:"column:cargo_matches" json:"cargoMatches,omitempty"`
+	CargoNote      *string    `gorm:"column:cargo_note" json:"cargoNote,omitempty"`
+	CargoCheckedAt *time.Time `gorm:"column:cargo_checked_at" json:"cargoCheckedAt,omitempty"`
+	PodID          *uuid.UUID `gorm:"column:pod_id;type:uuid" json:"podId,omitempty"`
+
+	// Site is filled on read from master data, so a caller has the address and
+	// the pin without a second call. Not a column.
+	Site *TripSiteRef `gorm:"-" json:"site,omitempty"`
+
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func (OrderStop) TableName() string { return "order_stops" }
+
+// Stop kinds.
+const (
+	StopLoad   = "load"
+	StopUnload = "unload"
+)
+
+// TripSiteRef is the warehouse behind a stop, as a caller needs it.
+type TripSiteRef struct {
+	Name                 string  `json:"name"`
+	Address              string  `json:"address,omitempty"`
+	City                 string  `json:"city,omitempty"`
+	Latitude             float64 `json:"latitude"`
+	Longitude            float64 `json:"longitude"`
+	GeofenceRadiusMeters int     `json:"geofenceRadiusMeters,omitempty"`
+}

@@ -200,6 +200,7 @@ func run() error {
 		slog.Warn("telemetry not configured; dispatch will rank trucks on their last unloading point")
 	}
 
+	orderStopRepo := repository.NewOrderStopRepository(db)
 	orderService := services.NewOrderService(orderRepo, shipmentRepo, agreementRepo, authClient, masterDataClient, notifier)
 	shipmentService := services.NewShipmentService(shipmentRepo, orderRepo, authClient, masterDataClient, notifier)
 	billingService := services.NewBillingService(agreementRepo, invoiceRepo, orderRepo, authClient, notifier)
@@ -207,8 +208,12 @@ func run() error {
 	dispatchService := services.NewDispatchService(orderRepo, orderRouteRepo, routeCache, masterDataClient, telemetryClient)
 	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo, masterDataClient, routeCache)
 	// So a driver may read the route of the shipment they are driving without
-	// holding the planner's dispatch.read.
+	// holding the planner's dispatch.read, and so a haul routes through every
+	// stop of the journey rather than straight past the middle ones.
 	dispatchService.WithShipments(shipmentRepo)
+	dispatchService.WithStops(orderStopRepo)
+	orderService.WithStops(orderStopRepo)
+	shipmentService.WithStops(orderStopRepo)
 	handoverService := services.NewHandoverService(shipmentRepo, orderRepo, handoverRepo, dispatchService, notifier)
 	shipmentService.WithDriverFlow(handoverRepo, podRepo)
 	podService := services.NewPodService(podRepo, shipmentRepo, orderRepo, shipmentService, notifier)

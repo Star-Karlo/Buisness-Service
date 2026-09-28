@@ -496,6 +496,11 @@ type Shipment struct {
 	ManifestFinalizedBy   *string    `gorm:"column:manifest_finalized_by" json:"manifestFinalizedBy,omitempty"`
 	ManifestFinalizedNote *string    `gorm:"column:manifest_finalized_note" json:"manifestFinalizedNote,omitempty"`
 
+	// Stops is the journey's visit list, filled on read. A trip with a point
+	// in the middle needs all of them, not the two ends the order columns
+	// hold. Not a column.
+	Stops []OrderStop `gorm:"-" json:"stops,omitempty"`
+
 	// Pods is the latest submission per stage, filled on read for the driver
 	// app and the console so one call answers "what is the driver waiting
 	// on". Not a column.

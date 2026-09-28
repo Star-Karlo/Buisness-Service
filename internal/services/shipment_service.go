@@ -28,6 +28,15 @@ type ShipmentService struct {
 	// pods fills Shipment.Pods on read, so the driver app sees the review
 	// state with the shipment. Nil leaves it empty (tests).
 	pods *repository.PodRepository
+	// stops is the journey's visit list, carried on the shipment so the
+	// driver app knows every point rather than only the two ends.
+	stops *repository.OrderStopRepository
+}
+
+// WithStops carries the journey's stops on the shipment read.
+func (s *ShipmentService) WithStops(stops *repository.OrderStopRepository) *ShipmentService {
+	s.stops = stops
+	return s
 }
 
 // WithDriverFlow wires the handover and POD registers in: the unloading
@@ -57,12 +66,42 @@ func (s *ShipmentService) decorate(ctx context.Context, shipment *models.Shipmen
 		}
 	}
 	s.fillTripSites(ctx, shipment)
+	s.fillStops(ctx, shipment)
 	if s.handovers != nil {
 		if ok, at, err := s.handovers.IsVerified(ctx, shipment.ID, "unloading"); err == nil {
 			shipment.HandoverVerified, shipment.HandoverVerifiedAt = ok, at
 		}
 	}
 	return shipment
+}
+
+// fillStops attaches the journey's visit list, each with its site resolved.
+//
+// The driver app showed two pins for a three-point trip because two pins were
+// all the shipment carried.
+func (s *ShipmentService) fillStops(ctx context.Context, shipment *models.Shipment) {
+	if s.stops == nil {
+		return
+	}
+	stops, err := s.stops.ListByOrder(ctx, shipment.OrderID)
+	if err != nil || len(stops) == 0 {
+		return
+	}
+	for i := range stops {
+		if s.masterdata == nil {
+			continue
+		}
+		w, err := s.masterdata.GetWarehouse(ctx, stops[i].WarehouseID)
+		if err != nil {
+			continue
+		}
+		stops[i].Site = &models.TripSiteRef{
+			Name: w.GetName(), Address: w.GetAddress(), City: w.GetCityId(),
+			Latitude: w.GetLatitude(), Longitude: w.GetLongitude(),
+			GeofenceRadiusMeters: int(w.GetGeofenceRadiusMeters()),
+		}
+	}
+	shipment.Stops = stops
 }
 
 // fillTripSites attaches the two warehouses of the trip.

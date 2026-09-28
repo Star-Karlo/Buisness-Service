@@ -62,6 +62,9 @@ type Actor struct {
 
 // OrderService owns the order lifecycle.
 type OrderService struct {
+	// stops is the journey's visit list, rebuilt from the order's own point
+	// lists on create and on edit. Optional (tests).
+	stops      *repository.OrderStopRepository
 	orders     *repository.OrderRepository
 	shipments  *repository.ShipmentRepository
 	agreements *repository.AgreementRepository
@@ -86,6 +89,12 @@ type OrderService struct {
 
 // WithDispatch attaches route planning. See the field comment for why this is
 // not a constructor argument.
+// WithStops wires the journey's stop register in.
+func (s *OrderService) WithStops(stops *repository.OrderStopRepository) *OrderService {
+	s.stops = stops
+	return s
+}
+
 func (s *OrderService) WithDispatch(d *DispatchService) { s.dispatch = d }
 
 // WithLifecycle attaches the shipment service, for the driver-flow
@@ -253,6 +262,14 @@ func (s *OrderService) Create(ctx context.Context, actor Actor, in CreateOrderIn
 		if err := s.items.ReplaceForOrder(ctx, order.ID, itemsFrom(in.Items)); err != nil {
 			slog.WarnContext(ctx, "order items not stored", "orderId", order.ID, "error", err)
 		}
+	}
+
+	// The journey's stops, from the point lists the wizard sends. Logged
+	// rather than returned on failure, for the same reason as the items above:
+	// an order that exists with an incomplete visit list is recoverable, one
+	// refused at the last step is a sale somebody has to place again.
+	if err := s.SyncStops(ctx, order); err != nil {
+		slog.WarnContext(ctx, "order stops not stored", "orderId", order.ID, "error", err)
 	}
 
 	// Plan the loading-to-unloading route. Known as soon as the order exists
@@ -1134,6 +1151,19 @@ func (s *OrderService) PatchDetail(ctx context.Context, actor Actor, id uuid.UUI
 		return nil, err
 	}
 	order.Detail = models.JSONB(detail)
+
+	// The stop list is derived from these keys, so a patch that moves a point
+	// has to move the journey with it — otherwise the order says one thing and
+	// the driver is sent somewhere else.
+	if _, touched := patch["loadingPoints"]; !touched {
+		_, touched = patch["unloadingPoints"]
+		if !touched {
+			return order, nil
+		}
+	}
+	if err := s.SyncStops(ctx, order); err != nil {
+		slog.WarnContext(ctx, "order stops not resynced", "orderId", order.ID, "error", err)
+	}
 	return order, nil
 }
 

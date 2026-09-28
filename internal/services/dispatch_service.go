@@ -42,6 +42,9 @@ type DispatchService struct {
 	// shipments answers "is this caller the driver of that shipment", for the
 	// driver's own route. Optional (tests).
 	shipments *repository.ShipmentRepository
+	// stops is the journey's visit list, so a haul routes through the middle
+	// of a trip rather than past it. Optional (tests).
+	stops *repository.OrderStopRepository
 }
 
 func NewDispatchService(
@@ -258,16 +261,29 @@ func (s *DispatchService) PlanHaul(ctx context.Context, order *models.Order) err
 		return nil
 	}
 
-	from, err := s.warehousePoint(ctx, *order.OriginWarehouseID)
-	if err != nil {
-		return err
-	}
-	to, err := s.warehousePoint(ctx, *order.DestinationWarehouseID)
-	if err != nil {
-		return err
+	// Every stop, in visit order, when the journey has them — a route that
+	// skips the middle understates the distance and misses the gates the
+	// truck actually passes. Two ends when it does not.
+	ids := []string{*order.OriginWarehouseID, *order.DestinationWarehouseID}
+	if s.stops != nil {
+		if stops, err := s.stops.ListByOrder(ctx, order.ID); err == nil && len(stops) >= 2 {
+			ids = ids[:0]
+			for _, st := range stops {
+				ids = append(ids, st.WarehouseID)
+			}
+		}
 	}
 
-	return s.planLeg(ctx, order.ID, models.LegHaul, from, to, uuid.Nil)
+	points := make([]routing.Point, 0, len(ids))
+	for _, id := range ids {
+		p, err := s.warehousePoint(ctx, id)
+		if err != nil {
+			return err
+		}
+		points = append(points, p)
+	}
+
+	return s.planLegVia(ctx, order.ID, models.LegHaul, points, uuid.Nil)
 }
 
 // PlanApproach computes the assigned truck's run to the loading point.
@@ -362,8 +378,22 @@ func (s *DispatchService) replanApproach(ctx context.Context, order *models.Orde
 
 // planLeg routes two points and stores the result against the order.
 func (s *DispatchService) planLeg(ctx context.Context, orderID uuid.UUID, leg string, from, to routing.Point, reroutedBy uuid.UUID) error {
+	return s.planLegVia(ctx, orderID, leg, []routing.Point{from, to}, reroutedBy)
+}
+
+// planLegVia routes through every point of a leg, not just its ends.
+//
+// A journey with a stop in the middle was routed straight past it, so its
+// distance, its tolls and the allowance read off them all described a trip
+// nobody was going to make. MAPID takes the whole list; the only thing that
+// had to change here was passing it.
+func (s *DispatchService) planLegVia(ctx context.Context, orderID uuid.UUID, leg string, points []routing.Point, reroutedBy uuid.UUID) error {
+	if len(points) < 2 {
+		return nil
+	}
+	from, to := points[0], points[len(points)-1]
 	result, err := s.cache.Route(ctx, routing.Request{
-		Points:  []routing.Point{from, to},
+		Points:  points,
 		Profile: routing.ProfileTruck,
 	})
 	if err != nil {
@@ -493,6 +523,12 @@ func (s *DispatchService) warehousePoint(ctx context.Context, id string) (routin
 // WithShipments lets the service answer a driver's own route.
 func (s *DispatchService) WithShipments(shipments *repository.ShipmentRepository) *DispatchService {
 	s.shipments = shipments
+	return s
+}
+
+// WithStops lets a haul route through every point of the journey.
+func (s *DispatchService) WithStops(stops *repository.OrderStopRepository) *DispatchService {
+	s.stops = stops
 	return s
 }
 
