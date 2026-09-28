@@ -63,7 +63,10 @@ type createOrderRequest struct {
 // service and stored, so a client cannot submit a volume that disagrees with
 // its own measurements.
 type orderItemRequest struct {
-	CatalogItemID string           `json:"catalogItemId"`
+	CatalogItemID string `json:"catalogItemId"`
+	// ShipmentNo is which shipment's goods these are, 1-based. Absent means
+	// the first, which is what a single-shipment order has.
+	ShipmentNo    int16            `json:"shipmentNo"`
 	Name          string           `json:"name"`
 	Quantity      *decimal.Decimal `json:"quantity"`
 	Unit          string           `json:"unit"`
@@ -109,6 +112,7 @@ func (h *OrderHandler) Create(c *gin.Context) {
 	for _, item := range req.Items {
 		items = append(items, services.OrderItemInput{
 			CatalogItemID: item.CatalogItemID,
+			ShipmentNo:    item.ShipmentNo,
 			Name:          item.Name,
 			Quantity:      item.Quantity,
 			Unit:          item.Unit,

@@ -82,6 +82,11 @@ type OrderItem struct {
 
 	CatalogItemID *string `gorm:"column:catalog_item_id" json:"catalogItemId,omitempty"`
 
+	// Which shipment's goods these are, 1-based — the same pairing the stops
+	// use, so a stop's plan is the items sharing its number. Every item of a
+	// single-shipment order is 1.
+	ShipmentNo int16 `gorm:"column:shipment_no;default:1" json:"shipmentNo"`
+
 	Name      string  `json:"name"`
 	Quantity  *Money  `gorm:"type:numeric(12,2)" json:"quantity,omitempty"`
 	Unit      *string `json:"unit,omitempty"`
