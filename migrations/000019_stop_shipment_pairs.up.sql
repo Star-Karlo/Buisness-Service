@@ -15,19 +15,13 @@ COMMENT ON COLUMN order_stops.shipment_no IS
     'Which shipment of the order this point belongs to, 1-based. A load and '
     'an unload sharing a number are the two ends of one shipment.';
 
--- Visit order is the planner's, not the arrays'.
---
--- The default is every Muat then every Bongkar, which is what the journey
--- does when nobody says otherwise. A planner may reorder in Allocate to
--- M1 → B1 → M2 → B2 and the route, distance, ETA and toll follow that order.
--- Stored on the order because it describes the whole trip, and only written
--- when the planner actually changes it (PRD ALC-08).
-ALTER TABLE orders
-    ADD COLUMN IF NOT EXISTS stop_sequence JSONB;
-
-COMMENT ON COLUMN orders.stop_sequence IS
-    'Planner-chosen visit order as [{type: muat|bongkar, index}]. NULL means '
-    'the default: every loading point in order, then every unloading point.';
+-- Visit order is the planner's, and it lives on the order's detail beside the
+-- point lists it indexes (orders.detail->'stopSequence', written by
+-- PUT /orders/:id/stop-sequence), so the choice travels with the thing it
+-- describes. The default is every Muat then every Bongkar, which is what the
+-- journey does when nobody says otherwise; a planner may reorder in Allocate
+-- to M1 -> B1 -> M2 -> B2 and the route, distance, ETA and toll follow that
+-- order (PRD ALC-08).
 
 -- Existing stops: loads and unloads were written in list order, so the k-th
 -- load and the k-th unload are the pair. Numbering them is arithmetic on what
