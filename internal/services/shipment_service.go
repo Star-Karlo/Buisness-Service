@@ -367,17 +367,28 @@ func siteLabel(to string) string {
 // accepted a missing position would enforce nothing.
 func (s *ShipmentService) assertAtSite(ctx context.Context, in AdvanceInput, order *models.Order) error {
 	var warehouseID string
+	kind := ""
 	switch in.To {
 	case models.ShipmentLoading:
+		kind = models.StopLoad
 		if order.OriginWarehouseID != nil {
 			warehouseID = *order.OriginWarehouseID
 		}
 	case models.ShipmentUnloading:
+		kind = models.StopUnload
 		if order.DestinationWarehouseID != nil {
 			warehouseID = *order.DestinationWarehouseID
 		}
 	default:
 		return nil
+	}
+	// The order's two warehouse columns are its FIRST loading point and its
+	// LAST unloading point. On a journey with several, the driver reporting
+	// the start of unloading is standing at the first drop-off, not the
+	// last, so judging them against the last refuses a driver who is exactly
+	// where they should be. The stop being worked is the honest answer.
+	if next := s.firstUnfinishedStop(ctx, order.ID, kind); next != nil {
+		warehouseID = next.WarehouseID
 	}
 	label := siteLabel(in.To)
 	if warehouseID == "" || !s.geofencingEnforced(ctx, order) {
@@ -792,4 +803,22 @@ func (s *ShipmentService) GetByOrderShipment(ctx context.Context, actor Actor, s
 		return nil, fmt.Errorf("%w: this shipment does not belong to your company", ErrForbidden)
 	}
 	return shipment, nil
+}
+
+// firstUnfinishedStop is the next visit of one kind the journey still owes,
+// or nil when the order has no stops of its own.
+func (s *ShipmentService) firstUnfinishedStop(ctx context.Context, orderID uuid.UUID, kind string) *models.OrderStop {
+	if s.stops == nil || kind == "" {
+		return nil
+	}
+	stops, err := s.stops.ListByOrder(ctx, orderID)
+	if err != nil || len(stops) <= 2 {
+		return nil
+	}
+	for i := range stops {
+		if stops[i].Kind == kind && stops[i].FinishedAt == nil {
+			return &stops[i]
+		}
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -101,6 +102,24 @@ func (s *ShipmentService) StartStop(ctx context.Context, actor Actor, shipmentID
 	}
 	if err := s.stops.UpdateFields(ctx, stop.ID, map[string]interface{}{"started_at": time.Now()}); err != nil {
 		return nil, err
+	}
+
+	// Work has begun at this point, so the shipment is made to say so. On an
+	// interleaved journey that means walking it to `unloading` while a
+	// loading point is still outstanding, which is the honest reading: the
+	// truck IS unloading. Without it the shipment would sit on the loading
+	// side for the whole trip, the unloading POD would be refused for
+	// disagreeing with it, and the steps that end the journey would never
+	// become reachable.
+	if current, err := s.shipments.FindByID(ctx, shipmentID); err == nil {
+		// As the driver: they are the one who has begun work here.
+		if _, err := s.walkShipmentTo(ctx, actor, current, order,
+			shipmentStatusForStop(stop), machineRole(actor, order)); err != nil {
+			// The stop's own record is what this visit is judged by, so a
+			// status that will not move does not stop the driver working.
+			slog.WarnContext(ctx, "shipment status not walked with the stops",
+				"shipmentId", shipmentID, "stopId", stop.ID, "error", err)
+		}
 	}
 	return s.reloadStop(ctx, order.ID, stop.ID)
 }
@@ -253,4 +272,67 @@ func stopLabel(stop *models.OrderStop) string {
 		return "titik muat"
 	}
 	return "titik bongkar"
+}
+
+// The shipment's status follows the stops, on a journey that has them.
+//
+// A two-ended trip's statuses and its two visits are the same events, so the
+// driver app drives the statuses directly. A journey through several points
+// cannot work that way: with the visit order Muat 1 → Bongkar 1 → Muat 2 →
+// Bongkar 2 the truck is unloading at Semarang while a loading point is still
+// outstanding, and no single status describes that. The stop rows do.
+//
+// So the stop events lead and the status is walked along behind them, far
+// enough that what the shipment says is true of the point being worked and
+// that the steps which end a stage — loaded, unloaded, finished — remain
+// reachable from wherever the journey has got to.
+
+// shipmentStatusForStop is where the shipment should stand while this visit
+// is being worked.
+func shipmentStatusForStop(stop *models.OrderStop) string {
+	if stop.Kind == models.StopLoad {
+		return models.ShipmentLoading
+	}
+	return models.ShipmentUnloading
+}
+
+// walkShipmentTo advances a shipment step by step until it reaches `to`,
+// taking each transition as the system.
+//
+// Step by step because the table allows one hop at a time: from toUnloading
+// the shipment cannot jump to unloading, it must pass through atUnloading.
+// Advancing one step per event instead would leave the journey stranded —
+// nothing else was going to take those steps, because the driver app stops
+// firing shipment statuses once a journey is stop-driven.
+//
+// A shipment already at or past `to` is left alone: the status only ever
+// moves forward, and a later visit must not drag it back.
+// The role matters: the steps through the middle of the journey — loaded →
+// toUnloading → atUnloading → unloading — belong to the driver, and the
+// system may not take them. That is correct, and it is why the walk is given
+// the role of whoever caused it: a driver starting work at a stop moves the
+// shipment as the driver, while the approval that ends a stage moves it as
+// the system, which is what those last two steps allow.
+func (s *ShipmentService) walkShipmentTo(ctx context.Context, actor Actor, shipment *models.Shipment, order *models.Order, to, role string) (*models.Shipment, error) {
+	if shipment.StatusCode == to || models.ShipmentStatusAtOrPast(shipment.StatusCode, to) {
+		return shipment, nil
+	}
+	// Bounded: the table is a chain, so the walk cannot be longer than it.
+	for i := 0; i < 12 && shipment.StatusCode != to; i++ {
+		next := models.NextShipmentStatusTowards(shipment.StatusCode, to)
+		if next == "" {
+			return shipment, nil // no route from here; leave it where it is
+		}
+		moved, err := s.advance(ctx, actor, shipment, order,
+			AdvanceInput{ShipmentID: shipment.ID, To: next}, role)
+		if err != nil {
+			// Returned, not swallowed: the caller decides. A stop event
+			// treats the status as a description and carries on; approving
+			// the last POD of a stage is what ends the journey, and a
+			// failure there must be heard.
+			return shipment, err
+		}
+		shipment = moved
+	}
+	return shipment, nil
 }

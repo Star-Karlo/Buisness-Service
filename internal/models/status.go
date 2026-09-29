@@ -310,6 +310,68 @@ func NextOrderStates(from, role string) []string {
 }
 
 // NextShipmentStates lists the moves available from a shipment state.
+// shipmentChain is the order a shipment's statuses happen in.
+//
+// The transition table says what may follow what; this says how far along a
+// status is, which is what "already past this point" and "one step towards
+// that point" need. Cancelled is absent on purpose: it is an end, not a
+// position on the way.
+var shipmentChain = []string{
+	ShipmentAssigned,
+	ShipmentToLoading,
+	ShipmentAtLoading,
+	ShipmentLoadingApproved,
+	ShipmentLoading,
+	ShipmentLoaded,
+	ShipmentToUnloading,
+	ShipmentAtUnloading,
+	ShipmentUnloadingApproved,
+	ShipmentUnloading,
+	ShipmentUnloaded,
+	ShipmentFinished,
+}
+
+func shipmentChainIndex(status string) int {
+	for i, s := range shipmentChain {
+		if s == status {
+			return i
+		}
+	}
+	return -1
+}
+
+// ShipmentStatusAtOrPast says whether a shipment has already reached a point
+// in its journey. Unknown statuses answer false: a status off the chain has
+// no position to compare.
+func ShipmentStatusAtOrPast(status, mark string) bool {
+	at, want := shipmentChainIndex(status), shipmentChainIndex(mark)
+	if at < 0 || want < 0 {
+		return false
+	}
+	return at >= want
+}
+
+// NextShipmentStatusTowards is the one step that moves a shipment closer to
+// `to`, or "" when there is none — because it is already there, past it, or
+// either status is off the chain.
+//
+// The legacy approval states are skipped: nothing enters them any more, and
+// walking a shipment into one would park it in a state the flow has left
+// behind.
+func NextShipmentStatusTowards(from, to string) string {
+	at, want := shipmentChainIndex(from), shipmentChainIndex(to)
+	if at < 0 || want < 0 || at >= want {
+		return ""
+	}
+	for i := at + 1; i <= want; i++ {
+		if shipmentChain[i] == ShipmentLoadingApproved || shipmentChain[i] == ShipmentUnloadingApproved {
+			continue
+		}
+		return shipmentChain[i]
+	}
+	return ""
+}
+
 func NextShipmentStates(from, role string) []string {
 	var out []string
 	for _, t := range shipmentTransitions[from] {

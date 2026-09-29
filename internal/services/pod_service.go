@@ -83,7 +83,28 @@ func (s *PodService) Submit(ctx context.Context, actor Actor, shipmentID uuid.UU
 	default:
 		return nil, fmt.Errorf("%w: stage must be loading or unloading", ErrValidation)
 	}
-	if shipment.StatusCode != wantStatus {
+	// Which visit this POD closes. Resolved before the state check, because
+	// on a journey with stops the STOP is what the POD has to agree with,
+	// not the shipment.
+	stopID := s.resolveStop(ctx, order.ID, in)
+	stop := s.stopByID(ctx, order.ID, stopID)
+
+	if stop != nil {
+		// A journey through several points has no single status that is true
+		// of the point being worked: with the order Muat 1 → Bongkar 1 →
+		// Muat 2 → Bongkar 2 the truck unloads at Semarang while a loading
+		// point is still outstanding, and the shipment cannot read both. The
+		// stop can, so the stop is the gate: work must have begun there, and
+		// it must not already be closed.
+		if stop.StartedAt == nil {
+			return nil, fmt.Errorf("%w: mulai proses di %s dulu sebelum mengirim POD", ErrValidation, stopLabel(stop))
+		}
+		if stop.FinishedAt != nil {
+			return nil, fmt.Errorf("%w: %s sudah selesai", ErrTransition, stopLabel(stop))
+		}
+		// The cargo check belongs to the visit too.
+		checked = stop.CargoCheckedAt
+	} else if shipment.StatusCode != wantStatus {
 		return nil, fmt.Errorf("%w: the %s POD is submitted while the shipment is %s, not %s", ErrTransition, in.Stage, wantStatus, shipment.StatusCode)
 	}
 	// At unloading the check is the PIC's, and it is waived while Web-Field
@@ -98,10 +119,6 @@ func (s *PodService) Submit(ctx context.Context, actor Actor, shipmentID uuid.UU
 	if len(in.Photos) == 0 {
 		return nil, fmt.Errorf("%w: at least one photo is required", ErrValidation)
 	}
-	// Which visit this POD closes. An explicit stop wins; otherwise it is the
-	// first unfinished stop of this stage, which is where the driver is.
-	stopID := s.resolveStop(ctx, order.ID, in)
-
 	photos := make(models.JSONArray, 0, len(in.Photos))
 	for _, p := range in.Photos {
 		if !podDocTypes[p.DocType] {
@@ -220,7 +237,12 @@ func (s *PodService) Review(ctx context.Context, actor Actor, shipmentID, podID 
 		steps = []string{models.ShipmentUnloaded, models.ShipmentFinished}
 	}
 	for _, to := range steps {
-		next, err := s.lifecycle.AdvanceBySystem(ctx, actor, shipment, order, to)
+		// Walked rather than stepped. On an interleaved journey the shipment
+		// may be anywhere on the chain when the last stop of a stage closes
+		// — approving the final Bongkar while the shipment still reads
+		// toUnloading is a jump the table does not allow — so it is taken
+		// through the states in between.
+		next, err := s.lifecycle.walkShipmentTo(ctx, actor, shipment, order, to, models.RoleSystem)
 		if err != nil {
 			return nil, err
 		}
@@ -395,4 +417,24 @@ func (s *PodService) notify(ctx context.Context, actor Actor, order *models.Orde
 			"reason":      reason,
 		},
 	})
+}
+
+// stopByID reads one of an order's visits, or nil when the journey has no
+// stops, the id is unknown, or the journey has only its two ends — a
+// two-ended trip's statuses and its visits are the same events, so it keeps
+// the shipment-level checks it always had.
+func (s *PodService) stopByID(ctx context.Context, orderID uuid.UUID, stopID *uuid.UUID) *models.OrderStop {
+	if s.stops == nil || stopID == nil {
+		return nil
+	}
+	stops, err := s.stops.ListByOrder(ctx, orderID)
+	if err != nil || len(stops) <= 2 {
+		return nil
+	}
+	for i := range stops {
+		if stops[i].ID == *stopID {
+			return &stops[i]
+		}
+	}
+	return nil
 }
