@@ -114,7 +114,7 @@ func (s *ShipmentService) StartStop(ctx context.Context, actor Actor, shipmentID
 	if current, err := s.shipments.FindByID(ctx, shipmentID); err == nil {
 		// As the driver: they are the one who has begun work here.
 		if _, err := s.walkShipmentTo(ctx, actor, current, order,
-			shipmentStatusForStop(stop), machineRole(actor, order)); err != nil {
+			shipmentStatusForStop(stop), machineRole(actor, order), in.Position); err != nil {
 			// The stop's own record is what this visit is judged by, so a
 			// status that will not move does not stop the driver working.
 			slog.WarnContext(ctx, "shipment status not walked with the stops",
@@ -313,7 +313,7 @@ func shipmentStatusForStop(stop *models.OrderStop) string {
 // the role of whoever caused it: a driver starting work at a stop moves the
 // shipment as the driver, while the approval that ends a stage moves it as
 // the system, which is what those last two steps allow.
-func (s *ShipmentService) walkShipmentTo(ctx context.Context, actor Actor, shipment *models.Shipment, order *models.Order, to, role string) (*models.Shipment, error) {
+func (s *ShipmentService) walkShipmentTo(ctx context.Context, actor Actor, shipment *models.Shipment, order *models.Order, to, role string, pos *Position) (*models.Shipment, error) {
 	if shipment.StatusCode == to || models.ShipmentStatusAtOrPast(shipment.StatusCode, to) {
 		return shipment, nil
 	}
@@ -323,8 +323,11 @@ func (s *ShipmentService) walkShipmentTo(ctx context.Context, actor Actor, shipm
 		if next == "" {
 			return shipment, nil // no route from here; leave it where it is
 		}
+		// The position travels with the walk: a driver-role step runs the
+		// geofence check, and a walk with no position is refused for having
+		// no GPS — at a gate the driver is standing at.
 		moved, err := s.advance(ctx, actor, shipment, order,
-			AdvanceInput{ShipmentID: shipment.ID, To: next}, role)
+			AdvanceInput{ShipmentID: shipment.ID, To: next, Position: pos}, role)
 		if err != nil {
 			// Returned, not swallowed: the caller decides. A stop event
 			// treats the status as a description and carries on; approving

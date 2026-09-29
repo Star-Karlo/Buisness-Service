@@ -242,7 +242,9 @@ func (s *PodService) Review(ctx context.Context, actor Actor, shipmentID, podID 
 		// — approving the final Bongkar while the shipment still reads
 		// toUnloading is a jump the table does not allow — so it is taken
 		// through the states in between.
-		next, err := s.lifecycle.walkShipmentTo(ctx, actor, shipment, order, to, models.RoleSystem)
+		// No position: the planner is approving from a desk, and the steps
+		// the system may take carry no geofence check.
+		next, err := s.lifecycle.walkShipmentTo(ctx, actor, shipment, order, to, models.RoleSystem, nil)
 		if err != nil {
 			return nil, err
 		}

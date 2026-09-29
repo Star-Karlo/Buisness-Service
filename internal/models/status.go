@@ -219,7 +219,13 @@ var shipmentTransitions = map[string][]Transition{
 		{To: ShipmentLoaded, AllowedRoles: []string{RoleSystem, RoleAdmin, RoleSuperadmin}},
 	},
 	ShipmentLoaded: {
-		{To: ShipmentToUnloading, AllowedRoles: []string{RoleDriver}},
+		// The system too, because the planner's approval of the loading POD
+		// is what sends the truck on: the status sheet triggers "Menuju titik
+		// bongkar" from that approval, not from the driver leaving the yard.
+		// Without it the approval marked the POD and then failed on this
+		// step, leaving every order — two-ended ones included — parked on
+		// `loaded` while a loaded truck waited for a gate nobody would open.
+		{To: ShipmentToUnloading, AllowedRoles: []string{RoleDriver, RoleSystem}},
 	},
 	ShipmentToUnloading: {
 		{To: ShipmentAtUnloading, AllowedRoles: []string{RoleDriver}},

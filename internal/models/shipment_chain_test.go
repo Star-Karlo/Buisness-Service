@@ -90,3 +90,40 @@ func TestTheStepsAnInterleavedJourneyNeedsBelongToTheDriver(t *testing.T) {
 		}
 	}
 }
+
+func TestApprovingALoadingPodCanSendTheTruckOn(t *testing.T) {
+	// The planner's approval is the documented trigger for "Menuju titik
+	// bongkar", and it is taken as the system. Both steps of that approval
+	// must therefore be open to the system — the second was not, so the POD
+	// was marked approved and the call then failed, on every order.
+	for _, step := range [][2]string{
+		{ShipmentLoading, ShipmentLoaded},
+		{ShipmentLoaded, ShipmentToUnloading},
+	} {
+		if err := CanTransitionShipment(step[0], step[1], RoleSystem); err != nil {
+			t.Errorf("approving the loading POD cannot walk %s → %s: %v", step[0], step[1], err)
+		}
+	}
+	// And the unloading approval's two steps, which already worked.
+	for _, step := range [][2]string{
+		{ShipmentUnloading, ShipmentUnloaded},
+		{ShipmentUnloaded, ShipmentFinished},
+	} {
+		if err := CanTransitionShipment(step[0], step[1], RoleSystem); err != nil {
+			t.Errorf("approving the unloading POD cannot walk %s → %s: %v", step[0], step[1], err)
+		}
+	}
+	// The truck's own movements stay the driver's: the system does not get
+	// to say a driver arrived somewhere or began unloading.
+	for _, step := range [][2]string{
+		{ShipmentToUnloading, ShipmentAtUnloading},
+		{ShipmentAtUnloading, ShipmentUnloading},
+	} {
+		if err := CanTransitionShipment(step[0], step[1], RoleSystem); err == nil {
+			t.Errorf("the system should not be able to walk %s → %s", step[0], step[1])
+		}
+		if err := CanTransitionShipment(step[0], step[1], RoleDriver); err != nil {
+			t.Errorf("the driver cannot walk %s → %s: %v", step[0], step[1], err)
+		}
+	}
+}
