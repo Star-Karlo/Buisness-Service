@@ -35,7 +35,7 @@ when the route is registered. `PermissionForOrderStatus` and
 `PermissionForShipmentStatus` map each target status to the key it needs, and a
 status with no entry is refused, so adding one without deciding who may reach
 it fails closed. The role rules still apply on top; a caller needs both. The
-full mapping is in [`../docs/PERMISSIONS.md`](../docs/PERMISSIONS.md) §5.
+full mapping is in [`../docs/shared/PERMISSIONS.md`](../docs/shared/PERMISSIONS.md) §5.
 
 Transitions are **compare-and-set**: the update applies only if the order is
 still in the expected state, so two managers pressing approve at once cannot
@@ -82,9 +82,29 @@ the way stops are paired, because **a stop's plan is its own shipment's items**:
 checked against the whole order's weight instead, unloading 2 000 of 4 500 kg at
 Semarang reads as 2 500 kg missing rather than as Shipment 1 delivered in full.
 `shipmentNo` rides on `orderItemRequest` → `OrderItemInput` → `models.OrderItem`,
-absent or below 1 meaning the first, and `ItemsByShipment` groups an order's
-lines into the per-shipment plan — nothing calls it yet; it is there for *Detail
-Muatan* and the per-stop E-POD plan.
+absent or below 1 meaning the first. There is **no grouping helper here**:
+`ItemsByShipment` was written for *Detail Muatan* and the per-stop E-POD plan,
+those screens group in the browser instead, and a rule with two implementations
+drifts — so it was dropped (32f2f08) rather than left as a second answer to
+"what is a shipment's plan". The column on the item stays; that is the pairing,
+and the create path writes it. Note that the console's Internal Order wizard
+does **not** populate it: `items[]` at the top level of a create is the
+per-company *Itemised cargo* field, off for most companies, so the wizard sends
+its lines on `detail.items` only — see
+`karlo_platform/REMAINING_WORK.md` §*Data shapes worth knowing*.
+
+**A stop list that the driver has begun is history, not a plan** (d565efc).
+`SyncStops` rebuilds the list on every write touching the order's detail, and
+`Replace` deletes every row and inserts new ones with new ids — mid-delivery
+that discarded each visit's arrival, start and cargo check and, because
+`shipment_pods.stop_id` and `shipment_handovers.stop_id` are `SET NULL`,
+detached the signed paperwork and the receiver's confirmed code from the visit
+they belong to. Two guards at that one seam: `sameJourney` compares the stored
+rows against `stopsForOrder` on `seq`, `kind`, `shipment_no` and `warehouse_id`
+— what the planner chose, not the recorded progress — and skips the rebuild
+when nothing about the journey has changed; and once `firstVisited` finds a stop
+with an `arrived_at`, `started_at` or `finished_at`, a list that *would* change
+is refused, naming the stop (*perjalanan sudah dimulai di …*).
 
 **Both are the general flow**, and neither belongs to a customer. Per-customer
 differences are differences of *data* — which agreement, which fields an order
@@ -93,6 +113,64 @@ order runs. Nothing here branches on a company. The whole of it is in
 [`../docs/business/MODEL.md`](../docs/business/MODEL.md) §`order_stops` and
 §*Two flows, both general*; the driver's side is
 [`../docs/shared/KTRIP_FLOW.md`](../docs/shared/KTRIP_FLOW.md).
+
+## The shipment's status follows the stops
+
+A two-ended trip's statuses and its two visits are the same events, so the
+driver app drives the statuses directly. A journey through several points cannot
+work that way: with the visit order Muat 1 → Bongkar 1 → Muat 2 → Bongkar 2 the
+truck is unloading at Semarang while a loading point is still outstanding, and
+**no single shipment status is true of the point being worked**. The stop rows
+are. So the stop events lead and the status is walked along behind them
+(fb48641, `internal/services/stop_visits.go`):
+
+- **the POD gates on the STOP**, on a journey with more than two of them.
+  `PodService.Submit` resolves the visit first and then requires that work has
+  begun there (`started_at`) and that it is not already closed (`finished_at`);
+  the *sesuai / tidak sesuai* check comes from `stop.cargo_checked_at` rather
+  than the shipment's. A two-ended journey keeps the shipment-level check it
+  always had — the POD must agree with `loading` / `unloading`.
+- **starting a stop walks the shipment** to the status that describes it —
+  `load` ⇒ `loading`, `unload` ⇒ `unloading` — through `walkShipmentTo`, which
+  takes one permitted step at a time because the table allows no jumps
+  (`toUnloading` cannot reach `unloading` without passing `atUnloading`). A
+  shipment already at or past the target is left alone, so a later visit never
+  drags it back. A walk that will not move is logged and does not stop the
+  driver working; the walk taken by an approval is returned, because that is
+  what ends the journey.
+- **the walk carries the role of whoever caused it, and their position.** The
+  middle of the chain — `loaded → toUnloading → atUnloading → unloading` — is
+  the driver's, so a stop event walks as the driver and the geofence check runs;
+  without the position forwarded from the stop call the walk was refused for
+  having no GPS at a gate the driver was standing at (93fa3e9). An approval
+  walks as the system, from a desk, with no position.
+- **arrival at unloading is judged against the stop being worked.**
+  `assertAtSite` used `orders.destination_warehouse_id`, which is the **last**
+  drop-off, so a driver reporting at the first was refused for being exactly
+  where they should be. It now prefers `firstUnfinishedStop` of that kind.
+- `internal/models/status.go` supplies the ordering the walk needs:
+  `shipmentChain` (the order the statuses happen in; `cancelled` is absent — it
+  is an end, not a position), `ShipmentStatusAtOrPast` and
+  `NextShipmentStatusTowards`, which skips the legacy `loadingApproved` /
+  `unloadingApproved` states rather than parking a shipment in one.
+  `internal/models/shipment_chain_test.go` pins them, including that every step
+  of the chain is walkable by the driver or the system.
+
+**`loaded → toUnloading` is open to the system as well as the driver** (93fa3e9).
+The status sheet triggers *Menuju titik bongkar* from the planner's approval of
+the loading POD, not from the driver leaving the yard, and approving that POD is
+two steps as the system: `loading → loaded`, then `loaded → toUnloading`. The
+second was the driver's alone, so **every** approval — two-ended orders as much
+as multi-stop ones — marked the POD and then failed on that step, leaving the
+shipment parked on `loaded`. The truck's own movements stay the driver's: the
+system still cannot say a driver arrived somewhere or began unloading.
+
+**Correct, and it looks wrong:** on an interleaved journey the shipment reads
+`loading` while the driver unloads at the first drop-off. The loading stage is
+not over until every loading stop's POD is approved, and the driver-role walk
+cannot take `loading → loaded` — that step belongs to the approval — so the walk
+stops there and logs it. The stop rows carry what is actually happening, and
+that is what the console, the driver app and the POD gate read.
 
 ## Money is exact
 
@@ -155,7 +233,7 @@ a customer is charged, and a stale PPN rate produces an invoice that is wrong in
 a way nobody notices until reconciliation.
 
 Nothing authoritative is cached: order status, invoice totals and reference
-validation are read from their owner every time. See `../docs/CACHING.md` for the
+validation are read from their owner every time. See `../docs/shared/CACHING.md` for the
 full list of what is deliberately left out and why.
 
 ## Layout
