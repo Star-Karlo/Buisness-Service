@@ -286,8 +286,11 @@ func (s *ShipmentService) advance(ctx context.Context, actor Actor, shipment *mo
 	}
 
 	// Arrival steps record where the driver actually was, and whether that was
-	// inside the warehouse's geofence.
-	if err := s.recordArrival(ctx, in, order, fields); err != nil {
+	// inside the warehouse's geofence. Whether being outside it REFUSES the
+	// arrival is the same question every other gate asks, so it is asked in
+	// the same place: this used to test the order's setting alone, which let
+	// Mode Uji past the start of loading but not past arriving at it.
+	if err := s.recordArrival(ctx, in, order, fields, s.fenceEnforcedFor(ctx, actor, order)); err != nil {
 		return nil, err
 	}
 
@@ -424,7 +427,7 @@ func (s *ShipmentService) assertAtSite(ctx context.Context, in AdvanceInput, ord
 // The result is recorded either way. Enforcement is a separate decision, taken
 // below, so that turning the company setting on later does not invalidate
 // history recorded while it was off.
-func (s *ShipmentService) recordArrival(ctx context.Context, in AdvanceInput, order *models.Order, fields map[string]interface{}) error {
+func (s *ShipmentService) recordArrival(ctx context.Context, in AdvanceInput, order *models.Order, fields map[string]interface{}, fenceEnforced bool) error {
 	var (
 		warehouseID string
 		latCol      string
@@ -448,6 +451,12 @@ func (s *ShipmentService) recordArrival(ctx context.Context, in AdvanceInput, or
 	}
 
 	if in.Position == nil {
+		// A caller the fence does not bind — Mode Uji, an administrator —
+		// may report an arrival without one. The columns stay empty, which
+		// is the truth: nobody said where the truck was.
+		if !fenceEnforced {
+			return nil
+		}
 		return fmt.Errorf("%w: a position is required when reporting arrival", ErrValidation)
 	}
 
@@ -484,7 +493,7 @@ func (s *ShipmentService) recordArrival(ctx context.Context, in AdvanceInput, or
 		return nil
 	}
 
-	if s.geofencingEnforced(ctx, order) {
+	if fenceEnforced {
 		// Same sentence the "mulai muat" refusal uses. A driver walking
 		// through the flow can be refused at the arrival or at the start
 		// depending on where their GPS put them, and two different wordings
