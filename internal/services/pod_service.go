@@ -89,7 +89,21 @@ func (s *PodService) Submit(ctx context.Context, actor Actor, shipmentID uuid.UU
 	stopID := s.resolveStop(ctx, order.ID, in)
 	stop := s.stopByID(ctx, order.ID, stopID)
 
-	if stop != nil {
+	// The FIRST point of a kind is worked through the shipment's own statuses
+	// — the driver app reports toLoading, atLoading, loading there, and its
+	// copy of those onto the stop row is best effort. With geofencing on that
+	// copy is refused outright when the phone's fix is outside the fence, so
+	// the row keeps a null started_at for a visit the driver plainly began.
+	// Gating that visit on the row therefore refused its POD; the shipment,
+	// which did record the work, is the honest gate for it.
+	stopDriven := stop != nil && !s.isFirstStopOfKind(ctx, order.ID, stop)
+	if stop != nil && !stopDriven && stop.StartedAt != nil {
+		// Unless the row was written after all, in which case it is as good
+		// an account of the visit as the shipment's.
+		stopDriven = true
+	}
+
+	if stopDriven {
 		// A journey through several points has no single status that is true
 		// of the point being worked: with the order Muat 1 → Bongkar 1 →
 		// Muat 2 → Bongkar 2 the truck unloads at Semarang while a loading
@@ -439,4 +453,23 @@ func (s *PodService) stopByID(ctx context.Context, orderID uuid.UUID, stopID *uu
 		}
 	}
 	return nil
+}
+
+// isFirstStopOfKind says whether a visit is the earliest of its kind on the
+// journey — the one the shipment's own statuses describe.
+func (s *PodService) isFirstStopOfKind(ctx context.Context, orderID uuid.UUID, stop *models.OrderStop) bool {
+	if s.stops == nil {
+		return false
+	}
+	stops, err := s.stops.ListByOrder(ctx, orderID)
+	if err != nil {
+		return false
+	}
+	for i := range stops {
+		if stops[i].Kind != stop.Kind {
+			continue
+		}
+		return stops[i].ID == stop.ID
+	}
+	return false
 }
