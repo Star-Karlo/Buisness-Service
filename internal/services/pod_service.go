@@ -353,6 +353,17 @@ func (s *PodService) CargoCheck(ctx context.Context, actor Actor, shipmentID uui
 		if err := s.lifecycle.assertActorMayAdvance(actor, shipment, order); err != nil {
 			return nil, err
 		}
+		// Loading must actually have begun. "Does what I loaded match the
+		// order?" has no meaning before it, and answering early was a trap:
+		// with geofencing on, a driver whose Muat slide was refused could
+		// still record "tidak sesuai", which showed on the order as though
+		// the load had been checked, while the POD stayed refused for a
+		// shipment that was not loading — and the app, seeing the check
+		// recorded, no longer offered the question. The driver could go
+		// neither forward nor back.
+		if !models.ShipmentStatusAtOrPast(shipment.StatusCode, models.ShipmentLoading) {
+			return nil, fmt.Errorf("%w: mulai muat dulu sebelum menjawab kesesuaian item", ErrValidation)
+		}
 		via = "app"
 	case "unloading":
 		if actor.Role == models.RoleDriver && !actor.StatusBypass {
