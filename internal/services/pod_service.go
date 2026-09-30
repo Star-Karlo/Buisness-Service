@@ -361,7 +361,8 @@ func (s *PodService) CargoCheck(ctx context.Context, actor Actor, shipmentID uui
 		// shipment that was not loading — and the app, seeing the check
 		// recorded, no longer offered the question. The driver could go
 		// neither forward nor back.
-		if !models.ShipmentStatusAtOrPast(shipment.StatusCode, models.ShipmentLoading) {
+		if !actor.StatusBypass && actor.Role == models.RoleDriver &&
+			!models.ShipmentStatusAtOrPast(shipment.StatusCode, models.ShipmentLoading) {
 			return nil, fmt.Errorf("%w: mulai muat dulu sebelum menjawab kesesuaian item", ErrValidation)
 		}
 		via = "app"

@@ -23,6 +23,21 @@ import (
 // The shipment's own statuses are untouched: they describe the trip as a
 // whole, and the stop rows describe what happened along it.
 
+// fenceEnforcedFor says whether this caller must be inside the stop's fence.
+//
+// The same answer the shipment's own steps give: the order has to enforce
+// geofencing at all, and Mode Uji and an administrator step past it. Without
+// this the per-stop checks ignored the bypass the rest of the flow honours,
+// so a walk-through that worked at the first loading point was refused at
+// every later one — with no way through but to switch the order's geofencing
+// off, which is not the thing being tested.
+func (s *ShipmentService) fenceEnforcedFor(ctx context.Context, actor Actor, order *models.Order) bool {
+	if actor.StatusBypass || actor.Role == models.RoleAdmin || actor.Role == models.RoleSuperadmin {
+		return false
+	}
+	return s.geofencingEnforced(ctx, order)
+}
+
 // StopVisitInput is one report from the gate.
 type StopVisitInput struct {
 	StopID   uuid.UUID
@@ -54,7 +69,7 @@ func (s *ShipmentService) ArriveAtStop(ctx context.Context, actor Actor, shipmen
 	within, distance, radius, known := s.stopGeofence(ctx, stop, in.Position)
 	if known {
 		fields["within_geofence"] = within
-		if !within && s.geofencingEnforced(ctx, order) {
+		if !within && s.fenceEnforcedFor(ctx, actor, order) {
 			return nil, fmt.Errorf("%w: Driver terdeteksi belum berada di %s — %.0f m dari gudang, di luar radius %d m",
 				ErrValidation, stopLabel(stop), distance, radius)
 		}
@@ -90,7 +105,7 @@ func (s *ShipmentService) StartStop(ctx context.Context, actor Actor, shipmentID
 	}
 	// Same rule as the shipment's own start: being at the gate is what
 	// permits the work, and an enforced order says so with a position.
-	if s.geofencingEnforced(ctx, order) {
+	if s.fenceEnforcedFor(ctx, actor, order) {
 		within, distance, radius, known := s.stopGeofence(ctx, stop, in.Position)
 		if in.Position == nil {
 			return nil, fmt.Errorf("%w: Driver terdeteksi belum berada di %s — aktifkan GPS lalu coba lagi", ErrValidation, stopLabel(stop))
