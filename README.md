@@ -124,12 +124,19 @@ truck is unloading at Semarang while a loading point is still outstanding, and
 are. So the stop events lead and the status is walked along behind them
 (fb48641, `internal/services/stop_visits.go`):
 
-- **the POD gates on the STOP**, on a journey with more than two of them.
+- **the POD gates on the STOP**, on a journey with more than two of them —
+  except at the **first point of a kind**, which is gated on the shipment.
   `PodService.Submit` resolves the visit first and then requires that work has
   begun there (`started_at`) and that it is not already closed (`finished_at`);
   the *sesuai / tidak sesuai* check comes from `stop.cargo_checked_at` rather
-  than the shipment's. A two-ended journey keeps the shipment-level check it
-  always had — the POD must agree with `loading` / `unloading`.
+  than the shipment's. `isFirstStopOfKind` carves out the first visit of each
+  kind — first by `seq`, so on Muat 1 → Bongkar 2 → Muat 2 → Bongkar 1 it is
+  Bongkar 2 that the unloading statuses describe — and there `stopDriven` is
+  false and the POD is judged against the shipment, which is where the driver
+  reported the work. Unless the row carries a `started_at` after all, in which
+  case it is as good an account of the visit and the stop gate applies again
+  (688aab6). A two-ended journey keeps the shipment-level check it always had —
+  the POD must agree with `loading` / `unloading`.
 - **starting a stop walks the shipment** to the status that describes it —
   `load` ⇒ `loading`, `unload` ⇒ `unloading` — through `walkShipmentTo`, which
   takes one permitted step at a time because the table allows no jumps
@@ -171,6 +178,65 @@ not over until every loading stop's POD is approved, and the driver-role walk
 cannot take `loading → loaded` — that step belongs to the approval — so the walk
 stops there and logs it. The stop rows carry what is actually happening, and
 that is what the console, the driver app and the POD gate read.
+
+**The first point of a kind is shipment-driven, and its stop row may never be
+written.** One shape, and it caused four separate faults before anyone named it
+(688aab6, 7fe34b0, and `karlo_platform` fa98778 / 0d91e00). At the first loading
+point the driver app reports `toLoading`, `atLoading` and `loading` — the
+shipment's own statuses — and then *mirrors* them onto the stop row, best
+effort: `_mirrorFirstStop` in `ktrip_flutter` swallows whatever the mirror
+returns. With geofencing **on** that mirror is not merely unreliable, it is
+refused outright when the phone's fix is outside the fence, so the row keeps a
+null `arrived_at`, `started_at` and `cargo_checked_at` for a visit the driver
+has plainly begun and the shipment has recorded. None of this showed up in the
+first live multi-shipment walk-through, because that order had geofencing off.
+
+So: **anything reading a stop row for the first point of a kind needs a
+shipment-level fallback, and anything gating on it does too.** Read without one,
+the same gap gave a POD refused for a visit in progress (*mulai proses di Muat 1
+dulu sebelum mengirim POD*), a *Linimasa* that stopped at "Menuju Titik Muat"
+while the status had moved past the arrival, the start and the cargo check, a
+*sesuai* banner shown over the driver's *tidak sesuai*, and an E-POD column
+comparing one delivery against every shipment's load added up. Later points have
+nothing to fall back to — the shipment has one arrival of each kind to give — so
+they read and gate on their own rows, which is the reason the stop gate exists
+at all.
+
+**The cargo check needs the work to have begun, on both routes** (7fe34b0).
+`CheckStopCargo` already refused an answer at a stop with no `started_at`;
+`PodService.CargoCheck` — the shipment-level route, which is the one the first
+point of a kind uses — had **no** status gate. So a driver whose Muat slide the
+geofence had refused could still answer *item muat tidak sesuai*, and that was a
+deadlock in three parts: the order displayed *Item Muat Tidak Sesuai* as though
+the load had been checked, the POD stayed refused because the shipment was not
+`loading`, and the app, seeing the check recorded, stopped offering the
+question. The driver could go neither forward nor back. It is now refused until
+`ShipmentStatusAtOrPast(status, ShipmentLoading)` — *mulai muat dulu sebelum
+menjawab kesesuaian item*. An order already stuck this way recovers by sliding
+Muat once the fence allows it: the check is already recorded, and the POD then
+passes both gates.
+
+**Mode Uji steps past a stop's fence, as it does the shipment's** (56f198c).
+`fenceEnforcedFor` (`internal/services/stop_visits.go`) is now the one place
+that question is asked, by `ArriveAtStop`, by `StartStop` and by the cargo-check
+gate above: the order has to enforce geofencing at all, and `actor.StatusBypass`
+(Mode Uji), `admin` and `superadmin` step past it. The per-stop checks were
+written calling `geofencingEnforced` directly and so ignored the bypass the rest
+of the flow honours — a walk-through that worked at the first loading point,
+whose start check has always honoured it, was then refused at every later one,
+with no way through but switching the order's geofencing off, which is not the
+thing being tested. `within_geofence` is still recorded either way, so a
+bypassed visit stays visible in the data rather than indistinguishable from an
+honest one. Pinned by `internal/services/stop_fence_test.go`.
+
+**The bypass does not reach the shipment's own ARRIVAL check**, and that is
+worth knowing before the next Mode Uji walk-through. `recordArrival` tests
+`geofencingEnforced` with no role or bypass condition, so on an enforced order
+`atLoading` / `atUnloading` are refused outside the fence for Mode Uji and for
+an administrator too — while `assertAtSite`, the start check immediately beside
+it, and now every per-stop check let them through. The asymmetry is in the code
+as it stands and nothing here says which side is meant; the arrival is the one
+gate a bypassed walk-through of an enforced order still has to reach honestly.
 
 ## Money is exact
 
