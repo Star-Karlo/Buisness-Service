@@ -527,6 +527,7 @@ func (h *OrderHandler) Summary(c *gin.Context) {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+// TEST-HOOK: remove before real drivers use this. See TEST_HOOKS.md.
 // statusBypassEnabled gates the TEMPORARY X-Status-Bypass testing header.
 // On unless STATUS_BYPASS_ENABLED=false; see services.Actor.StatusBypass.
 var statusBypassEnabled = os.Getenv("STATUS_BYPASS_ENABLED") != "false"

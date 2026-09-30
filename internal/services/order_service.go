@@ -50,6 +50,7 @@ type Actor struct {
 	// action as the client's own.
 	ActingFor bool
 
+	// TEST-HOOK: remove before real drivers use this. See TEST_HOOKS.md.
 	// StatusBypass is the TEMPORARY end-to-end testing switch Nathan asked
 	// for (Sept 2026): a company Administrator (or Karlo staff) who sends
 	// X-Status-Bypass: 1 may take state-machine steps that belong to another

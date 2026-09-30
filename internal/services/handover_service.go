@@ -315,6 +315,7 @@ type VerifyInput struct {
 }
 
 // Verify checks the code the PIC read out.
+// TEST-HOOK: remove before real drivers use this. See TEST_HOOKS.md.
 // HandoverTestCode is TEMPORARY: a code the driver app may enter instead
 // of the one WhatsApped to the PIC, so the unloading flow can be walked
 // through without a PIC on hand. It still needs a live, unexpired code to
