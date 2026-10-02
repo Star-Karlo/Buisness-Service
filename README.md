@@ -114,6 +114,86 @@ order runs. Nothing here branches on a company. The whole of it is in
 §*Two flows, both general*; the driver's side is
 [`../docs/shared/KTRIP_FLOW.md`](../docs/shared/KTRIP_FLOW.md).
 
+## There is no MAST mode
+
+MAST is a **company**, not a mode. Every row in this database is already
+company-scoped, so the legacy system's `mast_`-prefixed collections — a parallel
+set of documents for one customer, which is what made that separation necessary
+there — have no equivalent here and need none. A customer's peculiarities are
+expressed as **data**: which fields its company has enabled, and what its
+contracts say. Nothing in this service asks which company an order belongs to,
+and there is no branch to add one to. See *Both are the general flow* above and
+[`../docs/business/MODEL.md`](../docs/business/MODEL.md) §*Two flows, both
+general*.
+
+The three things one customer asked for are the shape of this: a contract that
+names its warehouses rather than two cities, a contract covering several
+customers at once, and a contract that fixes the driver's allowance. All three
+are declared fields, `Hidden` by default, plus one rule in the allowance
+service. A company that enables nothing — which is every company in production
+— behaves exactly as before.
+
+## A contract may agree the driver's allowance
+
+Most contracts leave the allowance to the order, where `AllowanceService`
+computes the evidence from that trip's own legs and a planner types each
+component (§[Uang sangu](../docs/business/MODEL.md#uang-sangu)). Some fix it on
+the contract instead: one figure agreed for the lane, split into what the driver
+is paid before leaving and what follows reconciliation, the same two numbers on
+every order under it.
+
+**One rule, not a second code path.** The allowance is the contract's when the
+contract has one, and computed from the trip when it has not.
+`allowanceSnapshotOf` (`internal/services/allowance_snapshot.go`) reads
+`agreements.detail.allowance` and returns nil unless **`total`, `upfront` and
+`final` are all there** — a half-written snapshot counts as none, because showing
+a driver a figure the contract never agreed is worse than showing them the
+computed one. The two shares are read **as stored** rather than recomputed from
+`upfrontPercent`, so amending the percentage later does not silently restate what
+was already paid. Figures are accepted as JSON numbers or as strings, because
+JSONB gives back whatever was written and the console may send a decimal as a
+string.
+
+Three consequences, and they are one answer reported in three places:
+
+- `View.Snapshot` carries the contract's figures on `GET /orders/:id/allowance`,
+  and `View.Editable` is **false** under a snapshot — from the start, not only
+  once finalised. Finalising still locks it; a snapshot locks it from the start
+  (`view.Editable = view.Editable && allowance.FinalisedAt == nil`).
+- `Save` **refuses** an override — `uang sangu sudah ditetapkan di agreement …`
+  — rather than relying on the form being hidden. The figure is what a driver is
+  handed in cash, and the contract is where that was agreed.
+- The console asks this endpoint for the snapshot instead of working the figure
+  out again, so the screen and the server cannot disagree about whether a figure
+  is editable. See
+  [`karlo_platform/REMAINING_WORK.md`](../../karlo_platform/REMAINING_WORK.md)
+  §*A contract that names its warehouses…*.
+
+`AgreementNumber` rides on the snapshot because the planner's first question
+about a number they cannot edit is where it came from.
+
+The agreement repository is attached after construction — `WithAgreements` in
+`cmd/server/main.go`, the same pattern `WithFieldConfig` and `WithDispatch` use
+— and is nil-checked at use: a deployment that has not wired it behaves as every
+order behaved before, with no contract ever fixing the allowance.
+`allowance_snapshot_test.go` covers the absent, half-written and string cases
+with no database.
+
+**What the five new contract fields do, and what they do not.**
+`internal/fieldconfig/catalog.go` declares `lanes.loadingPoints`,
+`lanes.unloadingPoints`, `multiCustomers`, `billingSplit` and
+`allowance.upfrontPercent`, all `Hidden`. They gate the **console's agreement
+form**: the server stores whatever the submission's `detail` carries and reads
+back only `detail.allowance`. The field check does not see them, because the
+console sends its whole agreement payload nested under `detail` while
+`handlers.presentKeys` walks dotted paths from the top of the body and
+`foldRateKeys` lifts only the route and pricing keys — so `hidden` is not
+enforced for these five the way it is for `items` on an order. Nothing in Go
+reads `multiCustomers` or `billingSplit` at all: invoice splitting is not
+implemented. And an order merged from several customers is an ordinary
+multi-shipment order to this service, because `OrderFlow` reads
+`detail.loadingPoints` and never asks who the shipments belong to.
+
 ## The shipment's status follows the stops
 
 A two-ended trip's statuses and its two visits are the same events, so the
