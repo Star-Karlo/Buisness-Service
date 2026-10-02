@@ -161,6 +161,49 @@ var agreementFields = []Field{
 	{Key: "incomeTaxIncluded", DataType: TypeBoolean, Default: Optional, Group: "Commercial", Label: "PPh 23 included in price", Sort: 170},
 	{Key: "minLoad", DataType: TypeNumber, Default: Optional, Group: "Commercial", Label: "Minimum load", Sort: 175},
 	{Key: "maxLoad", DataType: TypeNumber, Default: Optional, Group: "Commercial", Label: "Maximum load", Sort: 180},
+
+	// Lanes named by warehouse rather than by city.
+	//
+	// Most contracts price a city pair and leave the warehouses to the order;
+	// some name the two buildings in the contract itself, because the price
+	// was agreed for those docks. Index k of the two lists is one shipment's
+	// lane, the same pairing an order's points use.
+	//
+	// Hidden by default, and mutually exclusive with the city route above in
+	// practice rather than in code: a company turns one pair on and the other
+	// off. Nothing here forbids both, because a contract that names a city
+	// AND a preferred warehouse is a real thing to want.
+	{Key: "lanes.loadingPoints", DataType: TypeList, Default: Hidden, Group: "Route",
+		Label: "Loading points",
+		Help:  "Enable to name the warehouses in the contract instead of pricing a city pair.", Sort: 85},
+	{Key: "lanes.unloadingPoints", DataType: TypeList, Default: Hidden, Group: "Route",
+		Label: "Unloading points",
+		Help:  "One per shipment, paired with the loading point of the same position.", Sort: 86},
+
+	// Several customers under one contract.
+	//
+	// Each carries its own lanes and its own cargo, and an order placed
+	// against the contract covers all of them at once — one order, one truck,
+	// several customers' goods. Hidden by default: it changes who an order
+	// belongs to, which for most contracts is a single answer.
+	{Key: "multiCustomers", DataType: TypeList, Default: Hidden, Group: "Parties",
+		Label: "Additional customers",
+		Help:  "Enable for a contract covering several customers, each with its own lanes.", Sort: 25},
+	{Key: "billingSplit", DataType: TypeString, Default: Hidden, Group: "Commercial",
+		Label: "Billing split",
+		Help:  "How one agreed price is divided between those customers: by tonnage, or equally.", Sort: 185},
+
+	// The driver's allowance, agreed once on the contract.
+	//
+	// Most contracts leave it to the order, where it is worked out from that
+	// trip's own distance and time. A contract may instead fix it: a figure
+	// computed once for the lane, split into what the driver is paid before
+	// leaving and what follows after reconciliation. An order under such a
+	// contract reports those figures rather than its own — see
+	// AllowanceSnapshot.
+	{Key: "allowance.upfrontPercent", DataType: TypeNumber, Default: Hidden, Group: "Commercial",
+		Label: "Driver allowance paid upfront (%)",
+		Help:  "Enable to agree the allowance on the contract instead of per order.", Sort: 190},
 }
 
 // orderFields are the configurable parts of an order.

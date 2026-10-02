@@ -47,6 +47,16 @@ type AllowanceService struct {
 	masterdata *clients.MasterData
 	// cache prices legs planned before fares were stored; nil skips that.
 	cache *routing.Cache
+	// agreements answers whether the contract fixed the allowance instead of
+	// leaving it to the order. Optional (tests): nil means no contract ever
+	// fixes it, which is how every order behaved before.
+	agreements *repository.AgreementRepository
+}
+
+// WithAgreements lets the service read a contract's agreed allowance.
+func (s *AllowanceService) WithAgreements(agreements *repository.AgreementRepository) *AllowanceService {
+	s.agreements = agreements
+	return s
 }
 
 func NewAllowanceService(
@@ -146,8 +156,14 @@ type View struct {
 	Allowance *models.OrderAllowance `json:"allowance,omitempty"`
 	Evidence  Evidence               `json:"evidence"`
 
-	// Editable is false once the advance is finalised. Returned rather than
-	// inferred client-side so the button state and the server's answer cannot
+	// Snapshot is the contract's own agreed allowance, when it has one. The
+	// order then reports these figures instead of its own, and Editable is
+	// false: there is nothing per-order to revise.
+	Snapshot *AllowanceSnapshot `json:"snapshot,omitempty"`
+
+	// Editable is false once the advance is finalised, or from the start
+	// under a contract that fixed it. Returned rather than inferred
+	// client-side so the button state and the server's answer cannot
 	// disagree.
 	Editable bool `json:"editable"`
 }
@@ -179,11 +195,19 @@ func (s *AllowanceService) Get(ctx context.Context, actor Actor, orderID uuid.UU
 
 	view := &View{Evidence: evidence, Editable: true}
 
+	// A contract that fixed the allowance decides it for every order under
+	// it, so there is nothing per-order to edit and no component to revise.
+	if snapshot := s.snapshotFor(ctx, order); snapshot != nil {
+		view.Snapshot = snapshot
+		view.Editable = false
+	}
+
 	allowance, err := s.allowances.FindByOrder(ctx, orderID)
 	switch {
 	case err == nil:
 		view.Allowance = allowance
-		view.Editable = allowance.FinalisedAt == nil
+		// Finalising still locks it; a snapshot locks it from the start.
+		view.Editable = view.Editable && allowance.FinalisedAt == nil
 	case errors.Is(err, repository.ErrNotFound):
 		// No advance set yet. Not an error: the screen shows the evidence and
 		// an empty form.
@@ -318,6 +342,14 @@ func (s *AllowanceService) Save(ctx context.Context, actor Actor, orderID uuid.U
 	order, err := s.orders.FindByID(ctx, actor.CompanyID, orderID)
 	if err != nil {
 		return nil, err
+	}
+
+	// A contract that fixed the allowance has already decided it. Refusing
+	// here rather than only hiding the form client-side: the figure is what
+	// a driver is paid, and the contract is where that was agreed.
+	if snapshot := s.snapshotFor(ctx, order); snapshot != nil {
+		return nil, fmt.Errorf("%w: uang sangu sudah ditetapkan di agreement %s dan tidak bisa diubah per order",
+			ErrValidation, snapshot.AgreementNumber)
 	}
 
 	total := decimal.Zero

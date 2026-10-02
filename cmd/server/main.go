@@ -206,7 +206,8 @@ func run() error {
 	billingService := services.NewBillingService(agreementRepo, invoiceRepo, orderRepo, authClient, notifier)
 	fieldConfigService := services.NewFieldConfigService(fieldConfigRepo)
 	dispatchService := services.NewDispatchService(orderRepo, orderRouteRepo, routeCache, masterDataClient, telemetryClient)
-	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo, masterDataClient, routeCache)
+	allowanceService := services.NewAllowanceService(orderRepo, allowanceRepo, orderRouteRepo, masterDataClient, routeCache).
+		WithAgreements(agreementRepo)
 	// So a driver may read the route of the shipment they are driving without
 	// holding the planner's dispatch.read, and so a haul routes through every
 	// stop of the journey rather than straight past the middle ones.
