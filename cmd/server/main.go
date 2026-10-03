@@ -314,7 +314,8 @@ func run() error {
 	// service token (or the ingest key while tracking still needs one). See
 	// services.GeofenceWatcher for why this polls rather than waits for FMS
 	// to push.
-	geofenceWatcher := services.NewGeofenceWatcher(shipmentRepo, shipmentService, masterDataClient, telemetryClient, cfg.GeofencePollInterval)
+	geofenceWatcher := services.NewGeofenceWatcher(shipmentRepo, shipmentService, masterDataClient, telemetryClient, cfg.GeofencePollInterval).
+		WithStops(orderStopRepo)
 	stopGeofence := geofenceWatcher.Start()
 	defer stopGeofence()
 

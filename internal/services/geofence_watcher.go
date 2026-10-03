@@ -43,6 +43,10 @@ type GeofenceWatcher struct {
 	// more, and ReportGeofenceEvent is idempotent about that.
 	mu     sync.Mutex
 	inside map[fenceKey]bool
+
+	// stops lets a journey be watched at every point it visits, not only at
+	// the two the order names. Optional.
+	stops *repository.OrderStopRepository
 }
 
 type fenceKey struct {
@@ -57,6 +61,45 @@ const defaultGeofenceRadiusMeters = 200
 // staleFix is how old a position may be and still count. FMS's own "online"
 // threshold; a fix older than this says where the truck was, not where it is.
 const staleFix = 10 * time.Minute
+
+// WithStops lets the watcher see every point of a journey, not only its two
+// ends. Optional: without it the watcher behaves as it always did.
+func (w *GeofenceWatcher) WithStops(stops *repository.OrderStopRepository) *GeofenceWatcher {
+	w.stops = stops
+	return w
+}
+
+// fencesFor is the warehouses this shipment should be watched against.
+//
+// The order's two columns are its FIRST loading point and its LAST unloading
+// point. On a journey through several, the warehouses in between were watched
+// by nobody: a truck could enter and leave Semarang without the server
+// noticing, and the only record of the visit was whatever the driver's app
+// managed to report. Every stop is watched where the journey has them.
+func (w *GeofenceWatcher) fencesFor(ctx context.Context, a repository.ActiveShipment) []string {
+	if w.stops != nil {
+		if stops, err := w.stops.ListByOrder(ctx, a.OrderID); err == nil && len(stops) > 2 {
+			ids := make([]string, 0, len(stops))
+			for i := range stops {
+				// A stop already finished is behind the truck; watching it
+				// would report a crossing on the way past to somewhere else.
+				if stops[i].FinishedAt == nil && stops[i].WarehouseID != "" {
+					ids = append(ids, stops[i].WarehouseID)
+				}
+			}
+			if len(ids) > 0 {
+				return ids
+			}
+		}
+	}
+	ids := make([]string, 0, 2)
+	for _, id := range []*string{a.OriginWarehouseID, a.DestinationWarehouseID} {
+		if id != nil && *id != "" {
+			ids = append(ids, *id)
+		}
+	}
+	return ids
+}
 
 func NewGeofenceWatcher(
 	shipments *repository.ShipmentRepository,
@@ -148,18 +191,15 @@ func (w *GeofenceWatcher) Tick(ctx context.Context) {
 				imeis = append(imeis, t.GetImei())
 			}
 		}
-		for _, id := range []*string{a.OriginWarehouseID, a.DestinationWarehouseID} {
-			if id == nil || *id == "" {
-				continue
-			}
-			if _, seen := warehouses[*id]; !seen {
-				wh, err := w.masterdata.GetWarehouse(ctx, *id)
+		for _, id := range w.fencesFor(ctx, a) {
+			if _, seen := warehouses[id]; !seen {
+				wh, err := w.masterdata.GetWarehouse(ctx, id)
 				if err != nil {
-					slog.WarnContext(ctx, "geofence watcher: warehouse not resolved", "warehouseId", *id, "error", err)
-					warehouses[*id] = nil
+					slog.WarnContext(ctx, "geofence watcher: warehouse not resolved", "warehouseId", id, "error", err)
+					warehouses[id] = nil
 					continue
 				}
-				warehouses[*id] = wh
+				warehouses[id] = wh
 			}
 		}
 	}
@@ -188,15 +228,12 @@ func (w *GeofenceWatcher) Tick(ctx context.Context) {
 			continue
 		}
 
-		for _, id := range []*string{a.OriginWarehouseID, a.DestinationWarehouseID} {
-			if id == nil || *id == "" {
-				continue
-			}
-			wh := warehouses[*id]
+		for _, id := range w.fencesFor(ctx, a) {
+			wh := warehouses[id]
 			if wh == nil || (wh.GetLatitude() == 0 && wh.GetLongitude() == 0) {
 				continue
 			}
-			key := fenceKey{shipment: a.ShipmentID, warehouse: *id}
+			key := fenceKey{shipment: a.ShipmentID, warehouse: id}
 			keep[key] = struct{}{}
 
 			radius := float64(wh.GetGeofenceRadiusMeters())
@@ -213,9 +250,9 @@ func (w *GeofenceWatcher) Tick(ctx context.Context) {
 			if !crossed(was, known, within) {
 				continue
 			}
-			if _, err := w.shipment.ReportGeofenceEvent(ctx, a.ShipmentID, *id, within, fix.Time); err != nil {
+			if _, err := w.shipment.ReportGeofenceEvent(ctx, a.ShipmentID, id, within, fix.Time); err != nil {
 				slog.WarnContext(ctx, "geofence watcher: crossing not recorded",
-					"shipmentId", a.ShipmentID, "warehouseId", *id, "entering", within, "error", err)
+					"shipmentId", a.ShipmentID, "warehouseId", id, "entering", within, "error", err)
 				// Forget the transition so the next tick retries it.
 				w.mu.Lock()
 				if known {
@@ -227,7 +264,7 @@ func (w *GeofenceWatcher) Tick(ctx context.Context) {
 				continue
 			}
 			slog.InfoContext(ctx, "geofence crossing recorded",
-				"shipmentId", a.ShipmentID, "warehouseId", *id, "entering", within)
+				"shipmentId", a.ShipmentID, "warehouseId", id, "entering", within)
 		}
 	}
 	w.forget(keep)
