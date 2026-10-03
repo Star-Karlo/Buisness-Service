@@ -55,6 +55,7 @@ func (h *BillingHandler) Revise(c *gin.Context) {
 		return
 	}
 	foldRateKeys(present, req.Rates)
+	foldDetailKeys(present, req.Detail)
 
 	in := services.ReviseAgreementInput{
 		Kind:          req.Kind,

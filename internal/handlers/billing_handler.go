@@ -52,6 +52,44 @@ type rateRequest struct {
 	LeadTimeHours *int             `json:"leadTimeHours"`
 }
 
+// foldDetailKeys lifts the contract options the console nests under `detail`
+// to the catalogue paths that configure them.
+//
+// presentKeys walks the body as sent, so the console's `detail.loadingPoints`
+// is recorded under that path — while the field declaring it is
+// `lanes.loadingPoints`. The two never met, so a field switched OFF for a
+// company was still accepted from it: the configuration gated the form and
+// nothing else. These are the five that need lifting; the rest of `detail`
+// is free-form by design and no field declares it.
+func foldDetailKeys(present map[string]bool, detail map[string]any) {
+	lift := func(from, to string) {
+		v, ok := detail[from]
+		if !ok || v == nil {
+			return
+		}
+		// An empty list is an absence: the console sends one for a contract
+		// that named no warehouses, and treating that as present would
+		// refuse an ordinary contract under a company that has the field off.
+		if list, isList := v.([]interface{}); isList && len(list) == 0 {
+			return
+		}
+		if str, isStr := v.(string); isStr && str == "" {
+			return
+		}
+		present[to] = true
+	}
+	lift("loadingPoints", "lanes.loadingPoints")
+	lift("unloadingPoints", "lanes.unloadingPoints")
+	lift("multiCustomers", "multiCustomers")
+	lift("billingSplit", "billingSplit")
+
+	// The allowance is one object; what the form configures is the share
+	// paid upfront, so that is the key the presence of the object marks.
+	if a, ok := detail["allowance"].(map[string]interface{}); ok && len(a) > 0 {
+		present["allowance.upfrontPercent"] = true
+	}
+}
+
 // foldRateKeys lifts per-rate fields to the catalogue paths the form declares.
 //
 // Mutates `present` rather than returning a second map, so there is one answer
@@ -144,6 +182,7 @@ func (h *BillingHandler) CreateAgreement(c *gin.Context) {
 	// a field counts as supplied when any rate supplies it, which is the same
 	// question the form is asking — "is this input in use".
 	foldRateKeys(present, req.Rates)
+	foldDetailKeys(present, req.Detail)
 	// The form asks for a customer once per lane and derives the covered
 	// list from it, so the request carries `customers` and per-rate
 	// `customerCompanyId`, never a top-level `customerId`. The field
