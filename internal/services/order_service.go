@@ -914,6 +914,18 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID uu
 		TruckID:      &truckID,
 		StatusCode:   models.ShipmentAssigned,
 	}
+	// The tracker on that truck, as it is now. Read once here rather than
+	// looked up whenever somebody asks about this order later: a device moved
+	// to another truck would otherwise take this order's history with it.
+	// A truck without one is not an error — the driver's phone reports too.
+	if truck, err := s.masterdata.GetTruck(ctx, truckID); err == nil {
+		if imei := truck.GetImei(); imei != "" {
+			shipment.TelemetryIMEI = &imei
+		}
+	} else {
+		slog.WarnContext(ctx, "assigned truck's tracker not recorded on the shipment",
+			"orderId", orderID, "truckId", truckID, "error", err)
+	}
 	if err := s.shipments.Create(ctx, shipment); err != nil {
 		return nil, fmt.Errorf("create shipment: %w", err)
 	}

@@ -438,6 +438,15 @@ type Shipment struct {
 	DriverUserID *uuid.UUID `gorm:"type:uuid" json:"driverUserId,omitempty"`
 	TruckID      *string    `gorm:"column:truck_id" json:"truckId,omitempty"`
 
+	// TelemetryIMEI is the tracker that was on that truck when this work was
+	// assigned. Positions from a hardware tracker are keyed by the device,
+	// and which truck a device belongs to is read from master data when
+	// somebody asks — true enough for "where is it now", wrong for every
+	// question about the past. Recorded here so THIS order's track stays
+	// findable whatever is swapped later. Null means not recorded: a truck
+	// with no tracker, or a shipment assigned before the column existed.
+	TelemetryIMEI *string `gorm:"column:telemetry_imei" json:"telemetryImei,omitempty"`
+
 	StatusCode  string `gorm:"column:status_code;not null" json:"statusCode"`
 	Status      string `gorm:"-" json:"status"`
 	StatusAlias string `gorm:"-" json:"statusAlias"`
