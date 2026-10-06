@@ -402,10 +402,33 @@ func (s *AllowanceService) Save(ctx context.Context, actor Actor, orderID uuid.U
 }
 
 // Finalise commits the advance to the driver.
+//
+// Under a contract that fixed the allowance there is nothing for a planner to
+// enter, so no advance row was ever written — Save is the only thing that
+// writes one and it refuses outright when the contract decided the figures.
+// Finalising then failed with "there is no open advance to finalise", and
+// reconciliation afterwards had no advance to reconcile against: one missing
+// row, two broken steps, on every order under such a contract.
+//
+// So the contract's figures are materialised here, at the moment the advance
+// is committed to this driver. The contract decides WHAT is paid; the order
+// still records THAT it was paid, which is what the rest of the flow reads.
 func (s *AllowanceService) Finalise(ctx context.Context, actor Actor, orderID uuid.UUID) (*View, error) {
-	if _, err := s.orders.FindByID(ctx, actor.CompanyID, orderID); err != nil {
+	order, err := s.orders.FindByID(ctx, actor.CompanyID, orderID)
+	if err != nil {
 		return nil, err
 	}
+
+	if _, err := s.allowances.FindByOrder(ctx, orderID); errors.Is(err, repository.ErrNotFound) {
+		if snapshot := s.snapshotFor(ctx, order); snapshot != nil {
+			if err := s.materialiseSnapshot(ctx, actor, orderID, order, snapshot); err != nil {
+				return nil, err
+			}
+		}
+	} else if err != nil {
+		return nil, err
+	}
+
 	if err := s.allowances.Finalise(ctx, orderID, actor.UserID); err != nil {
 		if errors.Is(err, repository.ErrConflict) {
 			return nil, fmt.Errorf("%w: there is no open advance to finalise", ErrValidation)
@@ -413,6 +436,48 @@ func (s *AllowanceService) Finalise(ctx context.Context, actor Actor, orderID uu
 		return nil, err
 	}
 	return s.Get(ctx, actor, orderID)
+}
+
+// materialiseSnapshot writes the contract's agreed figures as this order's
+// advance, so finalisation and reconciliation have a real row to work on.
+//
+// The components name the contract they came from rather than the trip's
+// distance and time: these figures were not worked out from this journey, and
+// recording them as though they were would invite a later reroute to look like
+// it had restated what somebody was paid.
+func (s *AllowanceService) materialiseSnapshot(
+	ctx context.Context,
+	actor Actor,
+	orderID uuid.UUID,
+	order *models.Order,
+	snapshot *AllowanceSnapshot,
+) error {
+	evidence, err := s.evidence(ctx, orderID, order)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	row := &models.OrderAllowance{
+		OrderID:                orderID,
+		HaulDistanceMeters:     evidence.HaulDistanceMeters,
+		ApproachDistanceMeters: evidence.ApproachDistanceMeters,
+		TollEstimate:           &evidence.TollEstimate,
+		Components: models.JSONArray{
+			map[string]interface{}{
+				"code":   "agreement",
+				"label":  "Uang sangu sesuai agreement " + snapshot.AgreementNumber,
+				"amount": snapshot.Total.String(),
+				"note":   "Ditetapkan di agreement, tidak dihitung per order",
+			},
+		},
+		Total:           snapshot.Total,
+		EnteredByUserID: &actor.UserID,
+		EnteredAt:       &now,
+	}
+	if err := s.allowances.Save(ctx, row, "", actor.UserID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // History returns every superseded version.
