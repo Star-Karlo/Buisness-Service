@@ -62,6 +62,15 @@ type rateRequest struct {
 // nothing else. These are the five that need lifting; the rest of `detail`
 // is free-form by design and no field declares it.
 func foldDetailKeys(present map[string]bool, detail map[string]any) {
+	// A multi-customer contract names warehouses because of what it IS, not
+	// because the company chose to price lanes that way: each customer it
+	// covers has its own two. Marking lanes.* present for such a contract tied
+	// it to an option that is about ordinary contracts — switching that option
+	// off would then refuse every multi-customer contract, since a hidden
+	// field is refused rather than ignored.
+	multiCustomer, _ := detail["agreementType"].(string)
+	lanesAreIntrinsic := multiCustomer == "multi-customer"
+
 	lift := func(from, to string) {
 		v, ok := detail[from]
 		if !ok || v == nil {
@@ -78,8 +87,10 @@ func foldDetailKeys(present map[string]bool, detail map[string]any) {
 		}
 		present[to] = true
 	}
-	lift("loadingPoints", "lanes.loadingPoints")
-	lift("unloadingPoints", "lanes.unloadingPoints")
+	if !lanesAreIntrinsic {
+		lift("loadingPoints", "lanes.loadingPoints")
+		lift("unloadingPoints", "lanes.unloadingPoints")
+	}
 	lift("multiCustomers", "multiCustomers")
 	lift("billingSplit", "billingSplit")
 

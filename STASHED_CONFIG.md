@@ -54,6 +54,20 @@ flag alone dropped Customer 1's warehouses from the payload of every
 multi-customer contract written by a company that prices its ordinary ones city
 to city.
 
+### Why hiding the field does not refuse a Multi Customer contract
+
+`hidden` REFUSES a field that is sent anyway, and a multi-customer contract
+DOES send `loadingPoints` — Customer 1's own lanes live there. Hiding the field
+would therefore have refused every multi-customer contract the moment it was
+stashed.
+
+So the server no longer counts those warehouses towards `lanes.*` when the
+contract is multi-customer: such a contract names warehouses because of what it
+IS, not because the company chose to price lanes that way. The rule is the same
+one the form applies, on both sides. `TestHiddenWarehouseLanesRefuseOnlyOrdinaryContracts`
+holds it: with the option hidden, a multi-customer contract carrying warehouses
+is accepted and an ordinary one is refused.
+
 ### Worth knowing before restoring or re-stashing
 
 - Agreements already written keep whatever they stored. A MAST single-shipment
@@ -61,6 +75,6 @@ to city.
   form will not send those on a renewal while the field is hidden, so the
   renewal records city routes instead. That is the point of the stash, but it
   is a one-way door for that version — the previous version keeps its lanes.
-- `hidden` REFUSES a field that is sent anyway rather than dropping it. The form
-  stops sending these two once the flag is off, so nothing is refused; a
-  third-party client posting them directly would be.
+- A third-party client posting `loadingPoints` on an ORDINARY contract while
+  the option is hidden will be refused, which is the intent: the console stops
+  sending them, so only something bypassing it would hit this.
