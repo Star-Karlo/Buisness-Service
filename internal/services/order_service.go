@@ -881,6 +881,26 @@ func (s *OrderService) AssignDriver(ctx context.Context, actor Actor, orderID uu
 		return nil, fmt.Errorf("%w: driver %s is not assigned to truck %s", ErrValidation, driver.GetFullName(), truckID)
 	}
 
+	// One order per truck at a time.
+	//
+	// K-Trip holds a single order: a driver cannot accept a second while the
+	// first is unfinished. Nothing here said so, so the planner could assign
+	// one — the order moved to "assigned", the truck showed as taken, and the
+	// driver simply never saw it. The order then sat waiting on someone who
+	// could not act on it, which is the worst shape for this to fail in,
+	// because everything looks done from the office.
+	//
+	// Checked here rather than only in the planner's screen: that guard reads
+	// the orders it happens to have loaded, and this is an invariant of the
+	// flow rather than a hint for the form.
+	if busy, berr := s.orders.ActiveOrderForTruck(ctx, truckID, orderID); berr != nil {
+		return nil, fmt.Errorf("check truck availability: %w", berr)
+	} else if busy != nil {
+		return nil, fmt.Errorf(
+			"%w: truck %s is still on order %s and the driver app can hold only one at a time",
+			ErrValidation, truckID, busy.OrderNumber)
+	}
+
 	// The login, when there is one, is what the driver app authenticates as
 	// and what the handover checks against.
 	var driverUserID *uuid.UUID

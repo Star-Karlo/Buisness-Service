@@ -121,6 +121,36 @@ func (r *OrderRepository) ListForDriver(ctx context.Context, driverID uuid.UUID,
 }
 
 // FindByIDs resolves a batch, for the cross-service summary endpoint.
+// ActiveOrderForTruck returns the unfinished order a truck is already on, or
+// nil when it is free.
+//
+// "Unfinished" is everything that is not completed, cancelled or rejected: a
+// truck assigned but not yet moving is as unavailable as one mid-journey,
+// because the driver app holds one order at a time either way.
+func (r *OrderRepository) ActiveOrderForTruck(ctx context.Context, truckID string, exclude uuid.UUID) (*models.Order, error) {
+	if truckID == "" {
+		return nil, nil
+	}
+	var order models.Order
+	err := r.db.WithContext(ctx).
+		Where("truck_id = ? AND id <> ?", truckID, exclude).
+		Where("status_code NOT IN ?", []string{
+			models.OrderCompleted,
+			models.OrderCancelled,
+			models.OrderRejected,
+			models.OrderDraft,
+		}).
+		Order("created_at").
+		First(&order).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
 func (r *OrderRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Order, error) {
 	if len(ids) == 0 {
 		return nil, nil
