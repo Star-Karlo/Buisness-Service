@@ -11,11 +11,15 @@ import (
 	"github.com/karlo/business-service/internal/repository"
 )
 
-// K-Trip holds one order at a time: a driver cannot accept a second while the
-// first is unfinished. So a truck already carrying an order must not be
-// assignable to another — the office would see it assigned and the driver
-// would never see it at all.
-func TestATruckCarriesOneUnfinishedOrderAtATime(t *testing.T) {
+// What a truck is currently carrying, which the planner is shown rather than
+// stopped by: booking tomorrow's work while a truck is on today's is the
+// point of planning ahead.
+//
+// This is NOT an assignment guard. AssignDriver deliberately does not call
+// it — an earlier version did, and that blocked the planning the business
+// wants. It answers "what is this truck on now?" for anything that needs to
+// say so, including whoever builds K-Trip's order queue.
+func TestActiveOrderForTruckReportsWhatATruckIsCarrying(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	repo := repository.NewOrderRepository(db)
@@ -46,7 +50,7 @@ func TestATruckCarriesOneUnfinishedOrderAtATime(t *testing.T) {
 		t.Fatalf("lookup: %v", err)
 	}
 	if busy == nil {
-		t.Fatal("a truck mid-journey reported as free")
+		t.Fatal("a truck mid-journey reported as carrying nothing")
 	}
 	if busy.ID != running {
 		t.Errorf("found order %s, expected the running one %s", busy.ID, running)
